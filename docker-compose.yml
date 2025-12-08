@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  voxelmask-engine:
+    container_name: voxelmask_v1
+    image: voxelmask:latest
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./studies:/app/studies
+      - ./.streamlit:/app/.streamlit
+    restart: unless-stopped
+    environment:
+      - STREAMLIT_THEME_BASE=dark
+      - STREAMLIT_THEME_PRIMARY_COLOR=#00d4ff
+      - STREAMLIT_THEME_BACKGROUND_COLOR=#0e1117
+      - STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR=#262730
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false

@@ -1,0 +1,16 @@
+streamlit==1.28.0
+pydicom
+numpy>=1.24.0
+opencv-python-headless
+paddlepaddle
+paddleocr
+streamlit-drawable-canvas==0.9.3
+Pillow
+
+# NIfTI conversion for AI/ML research output
+dicom2nifti>=2.4.9
+nibabel>=5.1.0
+scipy>=1.10.0
+
+# PDF Report Generation
+fpdf2>=2.7.0

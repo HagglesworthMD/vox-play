@@ -1,0 +1,9 @@
+{
+  "Generic (Top Bar)": {"top": 0.0, "left": 0.0, "width": 1.0, "height": 0.15},
+  "GE Logiq/Vivid": {"top": 0.0, "left": 0.0, "width": 1.0, "height": 0.12},
+  "Philips EPIQ": {"top": 0.0, "left": 0.0, "width": 1.0, "height": 0.10},
+  "Siemens Acuson": {"top": 0.0, "left": 0.0, "width": 1.0, "height": 0.15},
+  "Sonosite (POCUS)": {"top": 0.0, "left": 0.0, "width": 1.0, "height": 0.08},
+  "Canon/Toshiba Aplio": {"top": 0.0, "left": 0.0, "width": 1.0, "height": 0.12},
+  "Bottom Right Corner": {"top": 0.85, "left": 0.70, "width": 0.30, "height": 0.15}
+}

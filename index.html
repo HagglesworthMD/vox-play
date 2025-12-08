@@ -1,0 +1,1940 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal DICOM Viewer (Debug Edition)</title>
+
+    <!-- Tailwind CSS (Restored) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        gray: { 850: '#1f2937', 900: '#111827', 950: '#0B0F19' },
+                        primary: { DEFAULT: '#38bdf8', dim: '#0ea5e9' }
+                    },
+                    animation: { 'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite' }
+                }
+            }
+        }
+    </script>
+
+    <!-- EARLY DEBUG SYSTEM -->
+    <script>
+        window.debugBuffer = [];
+        window.realConsoleLog = console.log;
+        window.realConsoleError = console.error;
+        window.realConsoleWarn = console.warn;
+
+        function flushDebugBuffer() {
+            const consoleEl = document.getElementById('debug-console');
+            if (!consoleEl) return;
+            window.debugBuffer.forEach(msg => logToScreen(msg.text, msg.type, true));
+            window.debugBuffer = [];
+        }
+
+        function logToScreen(message, type = 'info', skipBuffer = false) {
+            const consoleEl = document.getElementById('debug-console');
+            if (!consoleEl && !skipBuffer) {
+                window.debugBuffer.push({ text: message, type: type });
+                return;
+            }
+            if (!consoleEl) return;
+
+            const entry = document.createElement('div');
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            let colorClass = 'text-gray-300';
+            if (type === 'error') colorClass = 'text-red-400 font-bold';
+            if (type === 'warn') colorClass = 'text-yellow-400';
+            if (type === 'success') colorClass = 'text-green-400';
+
+            if (typeof message === 'object') {
+                try { message = JSON.stringify(message, null, 2); } catch (e) { }
+            }
+            entry.className = `break-all whitespace-pre-wrap ${colorClass} border-b border-gray-800/50 pb-0.5`;
+            entry.innerText = `[${timestamp}] ${message}`;
+            entry.style.fontFamily = 'monospace'; // Ensure mono fallback
+            consoleEl.appendChild(entry);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        console.log = function (...args) { window.realConsoleLog(...args); logToScreen(args.join(' ')); };
+        console.error = function (...args) { window.realConsoleError(...args); logToScreen(args.join(' '), 'error'); };
+        console.warn = function (...args) { window.realConsoleWarn(...args); logToScreen(args.join(' '), 'warn'); };
+
+        window.onerror = function (msg, url, line) {
+            console.error(`GLOBAL ERROR: ${msg} @ ${line}`);
+            return false;
+        };
+
+        function trackSuccess(el) { console.log(`LIBRARY LOADED: ${el.src.split('/').pop()}`); }
+        function trackError(el) { console.error(`LIBRARY FAILED: ${el.src}`); }
+    </script>
+
+    <style>
+        ::-webkit-scrollbar {
+            width: 8px;
+            background-color: #111827;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background-color: #374151;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background-color: #4b5563;
+        }
+
+        .cornerstone-canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .hidden-input {
+            display: none;
+        }
+    </style>
+
+    <!-- External Libraries (Reverted to Unpkg for Reliability) -->
+    <!-- HammerJS -->
+    <script src="https://unpkg.com/hammerjs@2.0.8/hammer.min.js" onload="trackSuccess(this)"
+        onerror="trackError(this)"></script>
+
+    <!-- DICOM Parser -->
+    <script src="https://unpkg.com/dicom-parser@1.8.21/dist/dicomParser.min.js" onload="trackSuccess(this)"
+        onerror="trackError(this)"></script>
+
+    <!-- Cornerstone Core (Legacy 2.x) -->
+    <script src="https://unpkg.com/cornerstone-core@2.6.1/dist/cornerstone.min.js" onload="trackSuccess(this)"
+        onerror="trackError(this)"></script>
+
+    <!-- Cornerstone Math -->
+    <script src="https://unpkg.com/cornerstone-math@0.1.10/dist/cornerstoneMath.min.js" onload="trackSuccess(this)"
+        onerror="trackError(this)"></script>
+
+    <!-- Cornerstone Tools (OPTIONAL - will gracefully degrade if unavailable) -->
+    <script>window.cornerstoneToolsLoaded = false;</script>
+    <script src="https://unpkg.com/cornerstone-tools@4.22.0/dist/cornerstoneTools.min.js"
+        onload="window.cornerstoneToolsLoaded = true; trackSuccess(this)"
+        onerror="console.warn('Cornerstone Tools unavailable - proceeding without interactive tools'); trackError(this)"></script>
+
+    <!-- WADO Image Loader -->
+    <script src="https://unpkg.com/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoader.bundle.min.js"
+        onload="trackSuccess(this)" onerror="trackError(this)"></script>
+
+    <!-- JSZip -->
+    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js" onload="trackSuccess(this)"
+        onerror="trackError(this)"></script>
+</head>
+
+<body
+    class="bg-gray-950 text-gray-100 font-sans antialiased h-screen w-screen overflow-hidden selection:bg-primary selection:text-white">
+
+    <!-- Main Layout -->
+    <div id="app" class="flex flex-col h-full w-full">
+
+        <!-- Header / Toolbar -->
+        <header
+            class="h-14 bg-gray-900 border-b border-gray-800 flex items-center justify-between px-4 shrink-0 shadow-lg z-20">
+            <div class="flex items-center space-x-3">
+                <div
+                    class="w-8 h-8 rounded bg-gradient-to-br from-primary to-blue-600 flex items-center justify-center shadow-lg shadow-primary/20">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z">
+                        </path>
+                    </svg>
+                </div>
+                <h1
+                    class="font-bold text-lg tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-gray-100 to-gray-400">
+                    OmniDICOM <span
+                        class="text-xs text-red-400 border border-red-900 bg-red-900/20 px-1 rounded ml-2">DEBUG
+                        MODE</span></h1>
+            </div>
+
+            <div class="flex items-center space-x-4">
+                <!-- Status Text -->
+                <div id="status-display" class="hidden text-sm text-gray-400 font-mono animate-pulse">Processing...
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="flex space-x-2">
+                    <button onclick="document.getElementById('input-folder').click()"
+                        class="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-md text-sm font-medium transition-colors duration-200 flex items-center space-x-2 shadow-sm">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                        </svg>
+                        <span>Open Folder</span>
+                    </button>
+                    <button onclick="document.getElementById('input-files').click()"
+                        class="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-md text-sm font-medium transition-colors duration-200 flex items-center space-x-2 shadow-sm">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                            </path>
+                        </svg>
+                        <span>Open Files / Zip</span>
+                    </button>
+                    <button onclick="toggleMetadataPanel()"
+                        class="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-md text-sm font-medium transition-colors duration-200 flex items-center space-x-2 shadow-sm"
+                        title="DICOM Metadata Inspector">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                            </path>
+                        </svg>
+                        <span>Tags</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Hidden Inputs -->
+            <input type="file" id="input-folder" class="hidden-input" multiple webkitdirectory>
+            <input type="file" id="input-files" class="hidden-input" multiple
+                accept=".dcm, .zip, application/zip, application/dicom">
+        </header>
+
+        <!-- Content Area -->
+        <div class="flex-1 flex overflow-hidden relative" id="drop-zone">
+
+            <!-- Sidebar -->
+            <aside
+                class="w-72 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 z-10 transition-all duration-300"
+                id="sidebar">
+                <!-- Sidebar Tabs -->
+                <div class="flex border-b border-gray-800 shrink-0">
+                    <button onclick="switchSidebarTab('studies')" id="tab-studies"
+                        class="flex-1 py-2 text-xs font-semibold text-center text-primary border-b-2 border-primary">
+                        <span>Studies</span>
+                        <span id="image-count"
+                            class="ml-1 bg-gray-700 px-1.5 py-0.5 rounded text-gray-200 text-[10px]">0</span>
+                    </button>
+                    <button onclick="switchSidebarTab('documents')" id="tab-documents"
+                        class="flex-1 py-2 text-xs font-semibold text-center text-gray-500 hover:text-gray-300">
+                        <span>Documents</span>
+                        <span id="doc-count"
+                            class="ml-1 bg-gray-700 px-1.5 py-0.5 rounded text-gray-200 text-[10px]">0</span>
+                    </button>
+                </div>
+
+                <!-- Studies List -->
+                <div id="image-list" class="flex-1 overflow-y-auto p-2 space-y-1">
+                    <!-- Image Cards will go here -->
+                </div>
+
+                <!-- Documents List (hidden by default) -->
+                <div id="documents-list" class="flex-1 overflow-y-auto p-2 space-y-1 hidden">
+                    <div class="text-gray-500 text-xs text-center py-4">No documents found</div>
+                </div>
+
+                <!-- Debug Toggle or Mini Info -->
+                <div class="p-2 border-t border-gray-800 text-xs text-gray-500 text-center shrink-0">
+                    Check Debug Console below for logs
+                </div>
+            </aside>
+
+            <!-- Main Viewer Area -->
+            <main class="flex-1 bg-black relative flex flex-col overflow-hidden">
+
+                <!-- Viewport -->
+                <div class="flex-1 relative bg-black flex items-center justify-center overflow-hidden h-2/3">
+                    <div id="dicom-image" class="w-full h-full relative" oncontextmenu="return false"
+                        onmousedown="return false"></div>
+
+                    <!-- Empty State -->
+                    <div id="empty-state"
+                        class="absolute inset-0 flex flex-col items-center justify-center text-gray-600 pointer-events-none">
+                        <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
+                            </path>
+                        </svg>
+                        <p class="text-lg font-light">Drag & Drop Folders, DICOMs, or ZIPs</p>
+                    </div>
+                </div>
+
+                <!-- CINE PLAYER CONTROL BAR -->
+                <div id="cine-player"
+                    class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center space-x-4 shrink-0">
+                    <!-- Play/Pause Button -->
+                    <button id="cine-play-btn" onclick="toggleCinePlay()"
+                        class="w-10 h-10 rounded-full bg-primary hover:bg-primary-dim flex items-center justify-center transition-colors shadow-lg">
+                        <svg id="cine-play-icon" class="w-5 h-5 text-white ml-0.5" fill="currentColor"
+                            viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z" />
+                        </svg>
+                        <svg id="cine-pause-icon" class="w-5 h-5 text-white hidden" fill="currentColor"
+                            viewBox="0 0 24 24">
+                            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                        </svg>
+                    </button>
+
+                    <!-- Scrubber / Slider -->
+                    <div class="flex-1 flex items-center space-x-3">
+                        <span id="cine-current" class="text-xs text-gray-400 font-mono w-12 text-right">0</span>
+                        <input type="range" id="cine-scrubber" min="0" max="100" value="0"
+                            class="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-primary"
+                            oninput="onScrubberChange(this.value)">
+                        <span id="cine-total" class="text-xs text-gray-400 font-mono w-12">/ 0</span>
+                    </div>
+
+                    <!-- Speed Control -->
+                    <div class="flex items-center space-x-2">
+                        <span class="text-xs text-gray-500">Speed:</span>
+                        <select id="cine-speed" onchange="setCineSpeed(this.value)"
+                            class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1">
+                            <option value="500">0.5x</option>
+                            <option value="250">1x</option>
+                            <option value="125" selected>2x</option>
+                            <option value="66">4x</option>
+                            <option value="33">8x</option>
+                        </select>
+                    </div>
+
+                    <!-- Loop Toggle -->
+                    <button id="cine-loop-btn" onclick="toggleLoop()"
+                        class="p-2 rounded hover:bg-gray-800 transition-colors" title="Loop">
+                        <svg id="loop-icon" class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor"
+                            viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                    </button>
+
+                    <!-- Divider -->
+                    <div class="w-px h-6 bg-gray-700"></div>
+
+                    <!-- W/L Presets -->
+                    <div class="flex items-center space-x-2">
+                        <span class="text-xs text-gray-500">W/L:</span>
+                        <select id="wl-presets" onchange="applyWLPreset(this.value)"
+                            class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1">
+                            <option value="default">Auto (DICOM)</option>
+                            <optgroup label="CT Presets">
+                                <option value="ct-abdomen">Abdomen (400/50)</option>
+                                <option value="ct-lung">Lung (1500/-600)</option>
+                                <option value="ct-bone">Bone (2000/400)</option>
+                                <option value="ct-brain">Brain (80/40)</option>
+                                <option value="ct-soft">Soft Tissue (350/50)</option>
+                                <option value="ct-liver">Liver (150/30)</option>
+                                <option value="ct-stroke">Stroke (40/40)</option>
+                            </optgroup>
+                            <optgroup label="MR Presets">
+                                <option value="mr-t1">T1 (500/250)</option>
+                                <option value="mr-t2">T2 (1000/500)</option>
+                                <option value="mr-flair">FLAIR (700/350)</option>
+                            </optgroup>
+                            <optgroup label="Other">
+                                <option value="xray">X-Ray (2000/1000)</option>
+                                <option value="mammo">Mammo (3000/1500)</option>
+                            </optgroup>
+                        </select>
+                    </div>
+
+                    <!-- Current W/L Display -->
+                    <div class="text-xs text-gray-500 font-mono hidden sm:block">
+                        <span id="wl-display">W:-- L:--</span>
+                    </div>
+
+                    <!-- Fit/Reset Button -->
+                    <button onclick="fitToWindow()" class="p-2 rounded hover:bg-gray-800 transition-colors"
+                        title="Fit to Window (F)">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                        </svg>
+                    </button>
+
+                    <!-- Series Info -->
+                    <div class="text-xs text-gray-400 hidden md:block">
+                        <span id="cine-series-name" class="text-primary">No series loaded</span>
+                    </div>
+                </div>
+
+                <!-- DEBUG CONSOLE PANEL -->
+                <div id="debug-console-container" class="h-1/4 bg-gray-950 border-t-2 border-gray-800 flex flex-col">
+                    <div class="flex items-center justify-between px-4 py-1 bg-gray-900 border-b border-gray-800">
+                        <span class="text-xs font-mono text-green-500 font-bold">TERMINAL / DEBUG LOG</span>
+                        <button onclick="clearDebugLog()" class="text-xs text-gray-400 hover:text-white uppercase">Clear
+                            Log</button>
+                    </div>
+                    <div id="debug-console"
+                        class="flex-1 overflow-y-auto p-2 font-mono text-xs text-gray-300 space-y-1 bg-black/50 select-text">
+                        <!-- Logs appear here -->
+                    </div>
+                </div>
+
+            </main>
+
+            <!-- Loading Modal Overlay -->
+            <div id="loading-overlay"
+                class="absolute inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+                <div
+                    class="bg-gray-900 border border-gray-700 p-8 rounded-xl shadow-2xl max-w-md w-full flex flex-col items-center">
+                    <div class="w-12 h-12 border-4 border-gray-700 border-t-primary rounded-full animate-spin mb-6">
+                    </div>
+                    <h3 class="text-xl font-medium text-white mb-2" id="loading-title">Processing Data</h3>
+                    <p class="text-gray-400 text-sm mb-6 text-center" id="loading-text">Extracting and parsing files...
+                    </p>
+
+                    <!-- Progress Bar -->
+                    <div class="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+                        <div id="loading-bar" class="h-full bg-primary transition-all duration-300 ease-out w-0"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="error-toast"
+                class="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-red-900/90 border border-red-700 text-white px-6 py-3 rounded-lg shadow-xl hidden transition-opacity duration-300 z-50 flex items-center">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span id="error-message">Error loading file</span>
+            </div>
+
+            <!-- METADATA INSPECTOR PANEL -->
+            <div id="metadata-panel"
+                class="absolute top-0 right-0 h-full w-96 bg-gray-900 border-l border-gray-700 z-40 transform translate-x-full transition-transform duration-300 flex flex-col shadow-2xl">
+                <!-- Header -->
+                <div class="p-3 bg-gray-850 border-b border-gray-700 flex items-center justify-between shrink-0">
+                    <div class="flex items-center space-x-2">
+                        <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                            </path>
+                        </svg>
+                        <span class="font-semibold text-white">DICOM Tags</span>
+                    </div>
+                    <button onclick="toggleMetadataPanel()" class="text-gray-400 hover:text-white">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Search -->
+                <div class="p-2 border-b border-gray-800">
+                    <input type="text" id="metadata-search" placeholder="Search tags..."
+                        class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary"
+                        oninput="filterMetadata(this.value)">
+                </div>
+
+                <!-- PHI Warning -->
+                <div id="phi-warning"
+                    class="hidden bg-yellow-900/30 border-b border-yellow-700/50 px-3 py-2 text-xs text-yellow-300 flex items-center space-x-2">
+                    <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                        </path>
+                    </svg>
+                    <span><strong>PHI Detected!</strong> This file contains patient identifiers.</span>
+                </div>
+
+                <!-- Tag Categories -->
+                <div class="flex border-b border-gray-800 text-xs shrink-0">
+                    <button onclick="setMetadataCategory('all')" id="cat-all"
+                        class="flex-1 py-2 text-center text-primary border-b-2 border-primary">All</button>
+                    <button onclick="setMetadataCategory('patient')" id="cat-patient"
+                        class="flex-1 py-2 text-center text-gray-400 hover:text-white">Patient</button>
+                    <button onclick="setMetadataCategory('study')" id="cat-study"
+                        class="flex-1 py-2 text-center text-gray-400 hover:text-white">Study</button>
+                    <button onclick="setMetadataCategory('image')" id="cat-image"
+                        class="flex-1 py-2 text-center text-gray-400 hover:text-white">Image</button>
+                </div>
+
+                <!-- Tag List -->
+                <div id="metadata-list" class="flex-1 overflow-y-auto p-2 space-y-1 text-xs">
+                    <div class="text-gray-500 text-center py-8">Load an image to view metadata</div>
+                </div>
+
+                <!-- Stats Footer -->
+                <div class="p-2 border-t border-gray-800 text-xs text-gray-500 flex justify-between shrink-0">
+                    <span id="metadata-count">0 tags</span>
+                    <span id="metadata-file">No file loaded</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Logic -->
+    <script>
+        // --- DEBUGGING UTILITIES ---
+        const debugConsole = document.getElementById('debug-console');
+
+        function logToScreen(message, type = 'info') {
+            const entry = document.createElement('div');
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+
+            let colorClass = 'text-gray-300';
+            if (type === 'error') colorClass = 'text-red-400 font-bold';
+            if (type === 'warn') colorClass = 'text-yellow-400';
+            if (type === 'success') colorClass = 'text-green-400';
+
+            // Handle object logging
+            if (typeof message === 'object') {
+                try {
+                    message = JSON.stringify(message, null, 2);
+                } catch (e) {
+                    message = '[Circular/Unserializable Object]';
+                }
+            }
+
+            entry.className = `break-all whitespace-pre-wrap ${colorClass} border-b border-gray-800/50 pb-0.5`;
+            entry.innerText = `[${timestamp}] ${message}`;
+            debugConsole.appendChild(entry);
+            debugConsole.scrollTop = debugConsole.scrollHeight;
+        }
+
+        function clearDebugLog() {
+            debugConsole.innerHTML = '';
+            logToScreen('Console cleared.', 'info');
+        }
+
+        // Override default console
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+
+        console.log = function (...args) {
+            originalLog(...args);
+            logToScreen(args.map(a => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' '));
+        };
+        console.error = function (...args) {
+            originalError(...args);
+            logToScreen(args.map(a => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' '), 'error');
+        };
+        console.warn = function (...args) {
+            originalWarn(...args);
+            logToScreen(args.map(a => (typeof a === 'object' ? JSON.stringify(a) : a)).join(' '), 'warn');
+        };
+
+        window.onerror = function (message, source, lineno, colno, error) {
+            logToScreen(`GLOBAL ERROR: ${message} at ${source}:${lineno}:${colno}`, 'error');
+            return false;
+        };
+
+        logToScreen("--- DEBUG SESSION STARTED ---", "success");
+
+        // Connect UI to Logger
+        flushDebugBuffer();
+
+        // --- Configuration & Initialization ---
+
+        logToScreen("Initializing Cornerstone...");
+
+        // Safety Check - Only require core libraries
+        if (typeof cornerstone === 'undefined' || typeof cornerstoneWADOImageLoader === 'undefined') {
+            logToScreen("CRITICAL: Core libraries not loaded. Check network tab.", "error");
+            throw new Error("Core libraries missing");
+        }
+        logToScreen("Core libraries verified.", "success");
+
+        // Config paths to handle web workers from CDN
+        cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
+        cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
+
+        // Set Web Worker paths to unpkg for standalone capability
+        // WE MUST USE A BLOB SHIM to load a cross-origin worker (CDN)
+        const workerUrl = 'https://unpkg.com/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoaderWebWorker.min.js';
+
+        logToScreen(`Creating Worker Blob Shim for URL: ${workerUrl}`);
+
+        // Create a local blob that imports the remote script
+        const blob = new Blob([`importScripts('${workerUrl}');`], { type: 'application/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+
+        logToScreen(`Worker Blob URL created: ${blobUrl}`);
+
+        const config = {
+            webWorkerPath: blobUrl,
+            taskConfiguration: {
+                decodeTask: {
+                    initializeCodecsPath: 'https://unpkg.com/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoaderWebWorker.min.js'
+                }
+            }
+        };
+
+        logToScreen("WADO Image Loader Config:", config);
+
+        cornerstoneWADOImageLoader.webWorkerManager.initialize(config);
+
+        // State
+        const state = {
+            imageIds: [],
+            currentImageIndex: 0,
+            fileBlobs: new Map(), // Store file references for metadata access
+            documents: [] // Non-DICOM files (PDFs, images, etc.)
+        };
+
+        // DOM Elements
+        const element = document.getElementById('dicom-image');
+        const imageList = document.getElementById('image-list');
+        const emptyState = document.getElementById('empty-state');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingBar = document.getElementById('loading-bar');
+        const loadingText = document.getElementById('loading-text');
+        const countDisplay = document.getElementById('image-count');
+
+        // Initialize Cornerstone
+        try {
+            cornerstone.enable(element);
+            logToScreen("Cornerstone enabled on element.");
+        } catch (e) {
+            logToScreen("Failed to enable cornerstone: " + e.message, "error");
+        }
+
+        // Initialize Tools (OPTIONAL)
+        if (window.cornerstoneToolsLoaded && typeof cornerstoneTools !== 'undefined') {
+            try {
+                cornerstoneTools.init();
+                logToScreen("Cornerstone Tools Initialized.");
+
+                const WwwcTool = cornerstoneTools.WwwcTool;
+                const PanTool = cornerstoneTools.PanTool;
+                const ZoomTool = cornerstoneTools.ZoomTool;
+                const StackScrollMouseWheelTool = cornerstoneTools.StackScrollMouseWheelTool;
+
+                cornerstoneTools.addTool(WwwcTool);
+                cornerstoneTools.addTool(PanTool);
+                cornerstoneTools.addTool(ZoomTool);
+                cornerstoneTools.addTool(StackScrollMouseWheelTool);
+
+                cornerstoneTools.setToolActive('Wwwc', { mouseButtonMask: 1 });
+                cornerstoneTools.setToolActive('Pan', { mouseButtonMask: 2 });
+                cornerstoneTools.setToolActive('Zoom', { mouseButtonMask: 4 });
+                cornerstoneTools.setToolActive('StackScrollMouseWheel', {});
+
+                logToScreen("Interactive tools enabled: W/L, Pan, Zoom, Scroll", "success");
+            } catch (toolsErr) {
+                logToScreen("Tools init error: " + toolsErr.message, "warn");
+            }
+        } else {
+            logToScreen("Cornerstone Tools not available. Viewer will work in display-only mode.", "warn");
+        }
+
+        // --- Logic Handlers ---
+
+        function showLoading(show, text = "Processing...") {
+            if (show) {
+                loadingOverlay.classList.remove('hidden');
+                loadingText.innerText = text;
+                loadingBar.style.width = '0%';
+            } else {
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        function updateProgress(percent) {
+            loadingBar.style.width = `${percent}%`;
+        }
+
+        function showError(msg) {
+            const toast = document.getElementById('error-toast');
+            document.getElementById('error-message').innerText = msg;
+            toast.classList.remove('hidden');
+            console.error(msg); // Will trigger screen log
+            setTimeout(() => toast.classList.add('hidden'), 4000);
+        }
+
+        // --- File Processing ---
+
+        document.getElementById('input-folder').addEventListener('change', (e) => handleFileSelection(e.target.files));
+        document.getElementById('input-files').addEventListener('change', (e) => handleFileSelection(e.target.files));
+
+        // Drag and Drop
+        const dropZone = document.getElementById('drop-zone');
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('bg-gray-900/50');
+        });
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('bg-gray-900/50');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('bg-gray-900/50');
+            logToScreen("Files dropped on DropZone");
+            handleFileSelection(e.dataTransfer.files);
+        });
+
+        async function handleFileSelection(fileList) {
+            if (!fileList || fileList.length === 0) {
+                logToScreen("No files selected.", "warn");
+                return;
+            }
+
+            logToScreen(`Input received: ${fileList.length} files.`);
+            showLoading(true, "Analyzing files...");
+            emptyState.style.display = 'none';
+
+            const files = Array.from(fileList);
+            const BATCH_SIZE = 50; // Process in batches for UI responsiveness
+            let totalProcessed = 0;
+
+            try {
+                // First pass: Collect all files (including from ZIPs)
+                let allFiles = [];
+
+                for (const file of files) {
+                    const ext = file.name.split('.').pop().toLowerCase();
+                    if (ext === 'zip') {
+                        loadingText.innerText = `Unzipping ${file.name}...`;
+                        const zipFiles = await extractZip(file);
+                        allFiles = allFiles.concat(zipFiles);
+                    } else if (!file.name.startsWith('.')) {
+                        allFiles.push(file);
+                    }
+                }
+
+                logToScreen(`Total files to process: ${allFiles.length}`);
+                loadingText.innerText = `Processing ${allFiles.length} files...`;
+
+                // Second pass: Process in batches with metadata extraction
+                for (let i = 0; i < allFiles.length; i += BATCH_SIZE) {
+                    const batch = allFiles.slice(i, i + BATCH_SIZE);
+
+                    await Promise.all(batch.map(f => processDicomFile(f)));
+
+                    totalProcessed += batch.length;
+                    const pct = Math.round((totalProcessed / allFiles.length) * 100);
+                    updateProgress(pct);
+                    loadingText.innerText = `Processed ${totalProcessed}/${allFiles.length} (${pct}%)`;
+
+                    // Yield to UI
+                    await new Promise(r => setTimeout(r, 0));
+                }
+
+                showLoading(false);
+                organizeBySeries();
+                refreshList();
+
+                logToScreen(`Processing Complete. Total Images = ${state.imageIds.length}`, "success");
+
+                if (state.imageIds.length > 0) {
+                    // Load first image of first series
+                    const firstSeriesKey = Object.keys(state.series)[0];
+                    if (firstSeriesKey && state.series[firstSeriesKey].length > 0) {
+                        loadAndDisplayImage(state.series[firstSeriesKey][0].globalIndex);
+                    }
+                } else {
+                    showError("No valid DICOM files found.");
+                }
+
+            } catch (err) {
+                console.error(err);
+                showError("Error: " + err.message);
+                showLoading(false);
+            }
+        }
+
+        function isValidDicomExtension(ext) {
+            return ['dcm', 'dic', 'dicom', ''].includes(ext); // Include no extension
+        }
+
+        async function extractZip(file) {
+            const extracted = [];
+            try {
+                const zip = await JSZip.loadAsync(file);
+                const entries = [];
+
+                zip.forEach((path, entry) => {
+                    if (!entry.dir && !path.includes('__MACOSX') && !path.startsWith('.')) {
+                        entries.push(entry);
+                    }
+                });
+
+                logToScreen(`ZIP contains ${entries.length} files.`);
+
+                for (let i = 0; i < entries.length; i++) {
+                    const entry = entries[i];
+                    const arrayBuffer = await entry.async('arraybuffer');
+                    const blob = new Blob([arrayBuffer]);
+                    blob.name = entry.name.split('/').pop();
+                    extracted.push(blob);
+
+                    if (i % 100 === 0) {
+                        updateProgress(Math.round((i / entries.length) * 50)); // First 50% for extraction
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+            } catch (e) {
+                console.error("ZIP error: " + e.message);
+            }
+            return extracted;
+        }
+
+        // Known non-DICOM file extensions (useful documents to display)
+        const NON_DICOM_EXTENSIONS = [
+            '.pdf',                                          // Documents
+            '.jpg', '.jpeg', '.png', '.tiff', '.tif',       // Useful images (not small icons)
+            '.doc', '.docx', '.txt', '.rtf',                 // Text documents
+            '.xls', '.xlsx', '.csv',                         // Spreadsheets
+            '.mp4', '.avi', '.mov'                           // Videos
+        ];
+
+        // Junk/system files to skip entirely
+        const JUNK_FILENAMES = [
+            'lockfile', 'version', '.ds_store', 'thumbs.db', 'desktop.ini',
+            '.localized', '.spotlight-v100', '.trashes', '.fseventsd',
+            'dicomdir', '.dicomdir'
+        ];
+        const JUNK_PREFIXES = ['.', '._', '__'];
+        const JUNK_EXTENSIONS = [
+            // Binaries & executables
+            '.dll', '.exe', '.so', '.dylib', '.sys', '.drv', '.ocx', '.com', '.msi',
+            // Debug/compiled
+            '.pdb', '.lib', '.obj', '.o', '.a',
+            // Config/settings
+            '.ini', '.cfg', '.config', '.inf', '.properties', '.profiles', '.local',
+            // License files
+            '.lic', '.license', '.key',
+            // Database files
+            '.dat', '.db', '.sqlite', '.mdb',
+            // Temp/backup
+            '.tmp', '.temp', '.bak', '.old', '.cache',
+            // Logs (usually unimportant)
+            '.log',
+            // Shortcuts/links
+            '.lnk', '.url',
+            // Windows/app resources
+            '.manifest', '.resources', '.ico', '.cur',
+            // App-specific asset formats (small images, likely icons/UI)
+            '.bmp', '.gif',
+            // XML configs (usually not useful to display)
+            '.xml',
+        ];
+
+        function getFileExtension(filename) {
+            if (!filename) return '';
+            const match = filename.toLowerCase().match(/\.[^.]+$/);
+            return match ? match[0] : '';
+        }
+
+        function getFileIcon(ext) {
+            if (['.pdf'].includes(ext)) return '📄';
+            if (['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif'].includes(ext)) return '🖼️';
+            if (['.doc', '.docx', '.txt', '.rtf'].includes(ext)) return '📝';
+            if (['.xls', '.xlsx', '.csv'].includes(ext)) return '📊';
+            if (['.mp4', '.avi', '.mov'].includes(ext)) return '🎬';
+            if (['.xml', '.html', '.htm'].includes(ext)) return '🌐';
+            return '📁';
+        }
+
+        function isJunkFile(filename, size) {
+            if (!filename) return true;
+            const lower = filename.toLowerCase();
+            const ext = getFileExtension(filename);
+
+            // Check exact junk filenames
+            if (JUNK_FILENAMES.includes(lower)) return true;
+
+            // Check junk prefixes (hidden files, macOS resource forks)
+            for (const prefix of JUNK_PREFIXES) {
+                if (lower.startsWith(prefix)) return true;
+            }
+
+            // Check junk extensions (DLLs, executables, etc.)
+            if (JUNK_EXTENSIONS.includes(ext)) return true;
+
+            // Skip very small files without extensions (likely system files)
+            if (!ext && size < 1000) return true;
+
+            // Skip files that are just "VERSION", "LOCKFILE" type names
+            if (!ext && /^[A-Z_]+$/.test(filename)) return true;
+
+            return false;
+        }
+
+        async function processDicomFile(fileOrBlob) {
+            const filename = fileOrBlob.name || '';
+            const ext = getFileExtension(filename);
+
+            // Skip junk/system files entirely
+            if (isJunkFile(filename, fileOrBlob.size)) {
+                return; // Silently ignore
+            }
+
+            // Check if it's a known non-DICOM file type
+            if (NON_DICOM_EXTENSIONS.includes(ext)) {
+                // Store as document
+                state.documents.push({
+                    name: filename,
+                    size: fileOrBlob.size,
+                    type: ext.replace('.', '').toUpperCase(),
+                    icon: getFileIcon(ext),
+                    blob: fileOrBlob,
+                    url: URL.createObjectURL(fileOrBlob)
+                });
+                return;
+            }
+
+            // Try to parse as DICOM
+            try {
+                const arrayBuffer = await fileOrBlob.arrayBuffer();
+                const byteArray = new Uint8Array(arrayBuffer);
+
+                // Quick DICOM check - look for DICM magic bytes at offset 128
+                const isDicom = byteArray.length > 132 &&
+                    byteArray[128] === 0x44 && // D
+                    byteArray[129] === 0x49 && // I
+                    byteArray[130] === 0x43 && // C
+                    byteArray[131] === 0x4D;   // M
+
+                if (!isDicom) {
+                    // Not a DICOM file - might be a non-standard document
+                    state.documents.push({
+                        name: filename || 'Unknown File',
+                        size: fileOrBlob.size,
+                        type: ext ? ext.replace('.', '').toUpperCase() : 'UNKNOWN',
+                        icon: getFileIcon(ext) || '📁',
+                        blob: fileOrBlob,
+                        url: URL.createObjectURL(fileOrBlob)
+                    });
+                    return;
+                }
+
+                // It's a valid DICOM file
+                const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(fileOrBlob);
+                state.fileBlobs.set(imageId, arrayBuffer);
+
+                // Parse DICOM header for metadata
+                let seriesUID = 'Unknown Series';
+                let seriesDesc = '';
+                let instanceNum = 0;
+
+                try {
+                    const dataSet = dicomParser.parseDicom(byteArray);
+                    seriesUID = dataSet.string('x0020000e') || 'Unknown';
+                    seriesDesc = dataSet.string('x0008103e') || '';
+                    instanceNum = parseInt(dataSet.string('x00200013')) || 0;
+                } catch (parseErr) {
+                    // Parsing failed but has DICM header - still treat as DICOM
+                }
+
+                state.imageIds.push({
+                    id: imageId,
+                    name: filename || "Unnamed",
+                    size: fileOrBlob.size,
+                    seriesUID: seriesUID,
+                    seriesDesc: seriesDesc,
+                    instanceNum: instanceNum,
+                    globalIndex: state.imageIds.length
+                });
+            } catch (e) {
+                // Complete failure - store as unknown document
+                state.documents.push({
+                    name: filename || 'Unknown File',
+                    size: fileOrBlob.size,
+                    type: 'UNKNOWN',
+                    icon: '📁',
+                    blob: fileOrBlob,
+                    url: null
+                });
+            }
+        }
+
+        function organizeBySeries() {
+            state.series = {};
+
+            state.imageIds.forEach((img, idx) => {
+                img.globalIndex = idx;
+                const key = img.seriesUID;
+                if (!state.series[key]) {
+                    state.series[key] = [];
+                }
+                state.series[key].push(img);
+            });
+
+            // Sort each series by instance number
+            Object.keys(state.series).forEach(key => {
+                state.series[key].sort((a, b) => a.instanceNum - b.instanceNum);
+            });
+
+            logToScreen(`Organized into ${Object.keys(state.series).length} series.`);
+        }
+
+        // --- UI Rendering ---
+
+        function switchSidebarTab(tab) {
+            const studiesTab = document.getElementById('tab-studies');
+            const docsTab = document.getElementById('tab-documents');
+            const imageList = document.getElementById('image-list');
+            const docsList = document.getElementById('documents-list');
+
+            if (tab === 'studies') {
+                studiesTab.classList.add('text-primary', 'border-b-2', 'border-primary');
+                studiesTab.classList.remove('text-gray-500');
+                docsTab.classList.remove('text-primary', 'border-b-2', 'border-primary');
+                docsTab.classList.add('text-gray-500');
+                imageList.classList.remove('hidden');
+                docsList.classList.add('hidden');
+            } else {
+                docsTab.classList.add('text-primary', 'border-b-2', 'border-primary');
+                docsTab.classList.remove('text-gray-500');
+                studiesTab.classList.remove('text-primary', 'border-b-2', 'border-primary');
+                studiesTab.classList.add('text-gray-500');
+                docsList.classList.remove('hidden');
+                imageList.classList.add('hidden');
+                refreshDocumentsList();
+            }
+        }
+
+        function refreshDocumentsList() {
+            const docsList = document.getElementById('documents-list');
+            const docCount = document.getElementById('doc-count');
+
+            docCount.innerText = state.documents.length;
+
+            if (state.documents.length === 0) {
+                docsList.innerHTML = '<div class="text-gray-500 text-xs text-center py-4">No documents found</div>';
+                return;
+            }
+
+            docsList.innerHTML = state.documents.map((doc, idx) => `
+                <div class="bg-gray-800 rounded p-2 hover:bg-gray-700 cursor-pointer transition-colors border border-gray-700"
+                     onclick="openDocument(${idx})">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-xl">${doc.icon}</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-sm text-gray-200 truncate">${doc.name}</div>
+                            <div class="text-xs text-gray-500">${doc.type} • ${formatFileSize(doc.size)}</div>
+                        </div>
+                        <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                        </svg>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function openDocument(idx) {
+            const doc = state.documents[idx];
+            if (!doc) {
+                logToScreen(`Document not found`, 'warn');
+                return;
+            }
+
+            // Text-based files - read with UTF-8 encoding and display in viewer
+            const textTypes = ['txt', 'xml', 'html', 'htm', 'csv', 'rtf', 'log', 'json'];
+            if (textTypes.includes(doc.type.toLowerCase())) {
+                try {
+                    const text = await doc.blob.text(); // Uses UTF-8 by default
+                    showTextViewer(doc.name, text);
+                    logToScreen(`Opened text document: ${doc.name}`);
+                } catch (e) {
+                    logToScreen(`Error reading document: ${e.message}`, 'error');
+                }
+                return;
+            }
+
+            // PDF and images - open in new tab
+            if (doc.url) {
+                window.open(doc.url, '_blank');
+                logToScreen(`Opened document: ${doc.name}`);
+            } else {
+                logToScreen(`Cannot open document: ${doc.name}`, 'warn');
+            }
+        }
+
+        function showTextViewer(filename, content) {
+            // Create modal overlay
+            const modal = document.createElement('div');
+            modal.id = 'text-viewer-modal';
+            modal.className = 'fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4';
+            modal.innerHTML = `
+                <div class="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+                    <div class="flex items-center justify-between p-3 border-b border-gray-700">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xl">📄</span>
+                            <span class="text-white font-medium">${filename}</span>
+                        </div>
+                        <button onclick="closeTextViewer()" class="text-gray-400 hover:text-white p-1">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <pre class="flex-1 overflow-auto p-4 text-gray-300 text-sm font-mono whitespace-pre-wrap bg-black/50">${escapeHtmlForViewer(content)}</pre>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // Close on escape
+            modal.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') closeTextViewer();
+            });
+            modal.focus();
+        }
+
+        function closeTextViewer() {
+            const modal = document.getElementById('text-viewer-modal');
+            if (modal) modal.remove();
+        }
+
+        function escapeHtmlForViewer(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function refreshList() {
+            imageList.innerHTML = '';
+            countDisplay.innerText = state.imageIds.length;
+            document.getElementById('doc-count').innerText = state.documents.length;
+
+            const seriesKeys = Object.keys(state.series);
+
+            seriesKeys.forEach((seriesUID, sIdx) => {
+                const images = state.series[seriesUID];
+                const firstImg = images[0];
+
+                // Series Header
+                const seriesHeader = document.createElement('div');
+                seriesHeader.className = 'bg-gray-850 p-2 rounded-t cursor-pointer border-b border-gray-700 sticky top-0 z-10';
+                seriesHeader.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <span class="font-semibold text-primary text-xs uppercase tracking-wide">Series ${sIdx + 1}</span>
+                        <span class="text-xs text-gray-500">${images.length} images</span>
+                    </div>
+                    <div class="text-xs text-gray-400 mt-1 truncate" title="${seriesUID}">${firstImg.seriesDesc || seriesUID.substring(0, 20) + '...'}</div>
+                `;
+
+                // Collapsible container
+                const seriesContainer = document.createElement('div');
+                seriesContainer.className = 'mb-3';
+                seriesContainer.id = `series-${sIdx}`;
+
+                // Only show first 20 images per series to avoid DOM bloat
+                const displayImages = images.slice(0, 20);
+                const imageContainer = document.createElement('div');
+                imageContainer.className = 'space-y-1 max-h-48 overflow-y-auto';
+
+                displayImages.forEach((img, iIdx) => {
+                    const item = document.createElement('div');
+                    item.className = 'bg-gray-800 hover:bg-gray-700 px-2 py-1.5 rounded cursor-pointer text-xs flex justify-between items-center border-l-2 border-transparent hover:border-primary';
+                    item.onclick = () => loadAndDisplayImage(img.globalIndex);
+                    item.dataset.globalIndex = img.globalIndex;
+
+                    item.innerHTML = `
+                        <span class="text-gray-300 truncate flex-1">#${img.instanceNum || iIdx + 1} ${img.name}</span>
+                        <span class="text-gray-600 text-xs ml-2">${(img.size / 1024).toFixed(0)}KB</span>
+                    `;
+
+                    imageContainer.appendChild(item);
+                });
+
+                if (images.length > 20) {
+                    const moreBtn = document.createElement('div');
+                    moreBtn.className = 'text-center text-xs text-primary py-1 cursor-pointer hover:underline';
+                    moreBtn.innerText = `+ ${images.length - 20} more images`;
+                    moreBtn.onclick = () => {
+                        logToScreen(`Loading all ${images.length} images for series...`);
+                        // For performance, just load first of remaining
+                        loadAndDisplayImage(images[20].globalIndex);
+                    };
+                    imageContainer.appendChild(moreBtn);
+                }
+
+                seriesContainer.appendChild(seriesHeader);
+                seriesContainer.appendChild(imageContainer);
+                imageList.appendChild(seriesContainer);
+            });
+        }
+
+        async function loadAndDisplayImage(index) {
+            if (index < 0 || index >= state.imageIds.length) return;
+
+            state.currentImageIndex = index;
+
+            // Update UI highlight
+            document.querySelectorAll('#image-list [data-global-index]').forEach(el => {
+                if (parseInt(el.dataset.globalIndex) === index) {
+                    el.classList.add('bg-gray-700', 'border-primary');
+                } else {
+                    el.classList.remove('bg-gray-700', 'border-primary');
+                }
+            });
+
+            const imageObject = state.imageIds[index];
+
+            // Update cine scrubber position
+            updateCineUI();
+
+            try {
+                const image = await cornerstone.loadImage(imageObject.id);
+                cornerstone.displayImage(element, image);
+
+                // Fit image to viewport (no cropping)
+                cornerstone.fitToWindow(element);
+
+                // Apply modality-specific window/level if not already set optimally
+                applyModalityWindow(imageObject, image);
+
+                // Update W/L display
+                updateWLDisplay();
+
+                // Store default viewport for reset
+                if (!state.defaultViewport) {
+                    const vp = cornerstone.getViewport(element);
+                    state.defaultViewport = { ...vp };
+                }
+            } catch (e) {
+                // Silent fail during cine playback
+            }
+        }
+
+        // Modality-specific window/level defaults
+        const MODALITY_DEFAULTS = {
+            'US': { autoCalc: true },           // Ultrasound - auto calculate from pixel data
+            'SC': { autoCalc: true },           // Secondary Capture
+            'XA': { ww: 2000, wc: 1000 },       // X-Ray Angiography
+            'CR': { ww: 2000, wc: 1000 },       // Computed Radiography
+            'DX': { ww: 2000, wc: 1000 },       // Digital X-Ray
+            'MG': { ww: 3000, wc: 1500 },       // Mammography
+            'RF': { ww: 2000, wc: 1000 },       // Radiofluoroscopy
+            'OT': { autoCalc: true },           // Other
+            'PT': { autoCalc: true },           // PET
+            'NM': { autoCalc: true },           // Nuclear Medicine
+        };
+
+        function applyModalityWindow(imageObject, image) {
+            // Get modality from stored metadata
+            const arrayBuffer = state.fileBlobs.get(imageObject.id);
+            if (!arrayBuffer) return;
+
+            let modality = 'CT'; // Default
+            try {
+                const byteArray = new Uint8Array(arrayBuffer);
+                const dataSet = dicomParser.parseDicom(byteArray);
+                modality = dataSet.string('x00080060') || 'CT';
+            } catch (e) {
+                return; // Can't determine modality
+            }
+
+            const vp = cornerstone.getViewport(element);
+
+            // Check if DICOM has embedded W/L values that look reasonable
+            const dicomWW = vp.voi?.windowWidth;
+            const dicomWC = vp.voi?.windowCenter;
+
+            // For certain modalities, DICOM values are usually correct
+            if (['CT', 'MR'].includes(modality) && dicomWW && dicomWW > 0) {
+                // Trust the DICOM values for CT/MR
+                return;
+            }
+
+            // Check modality defaults
+            const modalityConfig = MODALITY_DEFAULTS[modality];
+
+            if (modalityConfig) {
+                if (modalityConfig.autoCalc) {
+                    // Auto-calculate W/L from pixel data range
+                    autoCalculateWindowLevel(image);
+                } else if (modalityConfig.ww && modalityConfig.wc) {
+                    // Apply preset
+                    vp.voi.windowWidth = modalityConfig.ww;
+                    vp.voi.windowCenter = modalityConfig.wc;
+                    cornerstone.setViewport(element, vp);
+                }
+            } else if (!dicomWW || dicomWW <= 1) {
+                // No modality config and bad DICOM values - auto calculate
+                autoCalculateWindowLevel(image);
+            }
+        }
+
+        function autoCalculateWindowLevel(image) {
+            // Calculate optimal W/L from pixel statistics
+            const pixelData = image.getPixelData();
+
+            // Sample pixels to find min/max (full scan is slow for large images)
+            const step = Math.max(1, Math.floor(pixelData.length / 10000));
+            let min = Infinity, max = -Infinity;
+
+            for (let i = 0; i < pixelData.length; i += step) {
+                const val = pixelData[i];
+                if (val < min) min = val;
+                if (val > max) max = val;
+            }
+
+            // Calculate window from range with some padding
+            const range = max - min;
+            const ww = range * 1.0;  // Full range
+            const wc = min + (range / 2);
+
+            if (ww > 0) {
+                const vp = cornerstone.getViewport(element);
+                vp.voi.windowWidth = ww;
+                vp.voi.windowCenter = wc;
+                cornerstone.setViewport(element, vp);
+                logToScreen(`Auto W/L: W:${Math.round(ww)} L:${Math.round(wc)}`);
+            }
+        }
+
+        // --- CINE PLAYER LOGIC ---
+
+        const cine = {
+            playing: false,
+            loop: true,
+            speed: 125, // ms per frame
+            intervalId: null,
+            currentSeriesKey: null,
+            currentSeriesImages: []
+        };
+
+        function toggleCinePlay() {
+            if (cine.playing) {
+                stopCine();
+            } else {
+                startCine();
+            }
+        }
+
+        function startCine() {
+            // Determine current series from current image
+            const currentImg = state.imageIds[state.currentImageIndex];
+            if (!currentImg) return;
+
+            cine.currentSeriesKey = currentImg.seriesUID;
+            cine.currentSeriesImages = state.series[cine.currentSeriesKey] || [];
+
+            if (cine.currentSeriesImages.length < 2) {
+                logToScreen("Series too small for cine playback.", "warn");
+                return;
+            }
+
+            cine.playing = true;
+            updatePlayButtonUI();
+
+            // Update series name display
+            const seriesName = currentImg.seriesDesc || `Series (${cine.currentSeriesImages.length} images)`;
+            document.getElementById('cine-series-name').innerText = seriesName;
+
+            // Setup scrubber
+            document.getElementById('cine-scrubber').max = cine.currentSeriesImages.length - 1;
+            updateCineUI();
+
+            logToScreen(`Cine started: ${seriesName} @ ${Math.round(1000 / cine.speed)} fps`);
+
+            cine.intervalId = setInterval(() => {
+                advanceCineFrame();
+            }, cine.speed);
+        }
+
+        function stopCine() {
+            cine.playing = false;
+            if (cine.intervalId) {
+                clearInterval(cine.intervalId);
+                cine.intervalId = null;
+            }
+            updatePlayButtonUI();
+            logToScreen("Cine stopped.");
+        }
+
+        function advanceCineFrame() {
+            if (!cine.currentSeriesImages.length) return;
+
+            // Find current position in series
+            const currentImg = state.imageIds[state.currentImageIndex];
+            let seriesIdx = cine.currentSeriesImages.findIndex(img => img.globalIndex === currentImg.globalIndex);
+
+            seriesIdx++;
+
+            if (seriesIdx >= cine.currentSeriesImages.length) {
+                if (cine.loop) {
+                    seriesIdx = 0;
+                } else {
+                    stopCine();
+                    return;
+                }
+            }
+
+            const nextImg = cine.currentSeriesImages[seriesIdx];
+            loadAndDisplayImage(nextImg.globalIndex);
+        }
+
+        function updateCineUI() {
+            const currentImg = state.imageIds[state.currentImageIndex];
+            if (!currentImg || !cine.currentSeriesImages.length) {
+                // Initialize from current state
+                if (currentImg && state.series[currentImg.seriesUID]) {
+                    cine.currentSeriesImages = state.series[currentImg.seriesUID];
+                    cine.currentSeriesKey = currentImg.seriesUID;
+                    document.getElementById('cine-scrubber').max = cine.currentSeriesImages.length - 1;
+                    document.getElementById('cine-series-name').innerText = currentImg.seriesDesc || 'Current Series';
+                }
+            }
+
+            const seriesIdx = cine.currentSeriesImages.findIndex(img => img.globalIndex === currentImg?.globalIndex);
+
+            document.getElementById('cine-current').innerText = (seriesIdx + 1) || 0;
+            document.getElementById('cine-total').innerText = `/ ${cine.currentSeriesImages.length}`;
+            document.getElementById('cine-scrubber').value = seriesIdx >= 0 ? seriesIdx : 0;
+        }
+
+        function updatePlayButtonUI() {
+            const playIcon = document.getElementById('cine-play-icon');
+            const pauseIcon = document.getElementById('cine-pause-icon');
+
+            if (cine.playing) {
+                playIcon.classList.add('hidden');
+                pauseIcon.classList.remove('hidden');
+            } else {
+                playIcon.classList.remove('hidden');
+                pauseIcon.classList.add('hidden');
+            }
+        }
+
+        function onScrubberChange(value) {
+            if (cine.playing) stopCine(); // Pause on manual scrub
+
+            const idx = parseInt(value);
+            if (cine.currentSeriesImages[idx]) {
+                loadAndDisplayImage(cine.currentSeriesImages[idx].globalIndex);
+            }
+        }
+
+        function setCineSpeed(ms) {
+            cine.speed = parseInt(ms);
+            if (cine.playing) {
+                // Restart with new speed
+                stopCine();
+                startCine();
+            }
+        }
+
+        function toggleLoop() {
+            cine.loop = !cine.loop;
+            const icon = document.getElementById('loop-icon');
+            icon.classList.toggle('text-primary', cine.loop);
+            icon.classList.toggle('text-gray-500', !cine.loop);
+            logToScreen(`Loop: ${cine.loop ? 'ON' : 'OFF'}`);
+        }
+
+        // --- WINDOW/LEVEL PRESETS ---
+
+        const WL_PRESETS = {
+            // CT Presets (Window Width / Window Center)
+            'ct-abdomen': { ww: 400, wc: 50 },
+            'ct-lung': { ww: 1500, wc: -600 },
+            'ct-bone': { ww: 2000, wc: 400 },
+            'ct-brain': { ww: 80, wc: 40 },
+            'ct-soft': { ww: 350, wc: 50 },
+            'ct-liver': { ww: 150, wc: 30 },
+            'ct-stroke': { ww: 40, wc: 40 },
+            // MR Presets
+            'mr-t1': { ww: 500, wc: 250 },
+            'mr-t2': { ww: 1000, wc: 500 },
+            'mr-flair': { ww: 700, wc: 350 },
+            // Other
+            'xray': { ww: 2000, wc: 1000 },
+            'mammo': { ww: 3000, wc: 1500 },
+        };
+
+        function applyWLPreset(presetKey) {
+            if (presetKey === 'default') {
+                // Reset to DICOM embedded values
+                if (state.defaultViewport) {
+                    const vp = cornerstone.getViewport(element);
+                    vp.voi.windowWidth = state.defaultViewport.voi.windowWidth;
+                    vp.voi.windowCenter = state.defaultViewport.voi.windowCenter;
+                    cornerstone.setViewport(element, vp);
+                    updateWLDisplay();
+                    logToScreen("Reset to DICOM default W/L");
+                }
+                return;
+            }
+
+            const preset = WL_PRESETS[presetKey];
+            if (preset) {
+                const vp = cornerstone.getViewport(element);
+                vp.voi.windowWidth = preset.ww;
+                vp.voi.windowCenter = preset.wc;
+                cornerstone.setViewport(element, vp);
+                updateWLDisplay();
+                logToScreen(`Applied W/L preset: ${presetKey} (W:${preset.ww} L:${preset.wc})`);
+            }
+        }
+
+        function updateWLDisplay() {
+            try {
+                const vp = cornerstone.getViewport(element);
+                if (vp && vp.voi) {
+                    const ww = Math.round(vp.voi.windowWidth);
+                    const wc = Math.round(vp.voi.windowCenter);
+                    document.getElementById('wl-display').innerText = `W:${ww} L:${wc}`;
+                }
+            } catch (e) {
+                // Viewport not ready
+            }
+        }
+
+        function fitToWindow() {
+            cornerstone.fitToWindow(element);
+            updateWLDisplay();
+            logToScreen("Fit to window");
+        }
+
+        // --- CLICK & DRAG WINDOW/LEVEL (Brightness/Contrast) ---
+
+        const wlDrag = {
+            active: false,
+            startX: 0,
+            startY: 0,
+            startWW: 0,
+            startWC: 0
+        };
+
+        // Mouse events for W/L adjustment
+        element.addEventListener('mousedown', (e) => {
+            // Only left button
+            if (e.button !== 0) return;
+            startWLDrag(e.clientX, e.clientY);
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!wlDrag.active) return;
+            handleWLDrag(e.clientX, e.clientY);
+        });
+
+        document.addEventListener('mouseup', () => {
+            wlDrag.active = false;
+        });
+
+        // Touch events for mobile W/L adjustment
+        element.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                startWLDrag(e.touches[0].clientX, e.touches[0].clientY);
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        element.addEventListener('touchmove', (e) => {
+            if (!wlDrag.active || e.touches.length !== 1) return;
+            handleWLDrag(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+        }, { passive: false });
+
+        element.addEventListener('touchend', () => {
+            wlDrag.active = false;
+        });
+
+        function startWLDrag(x, y) {
+            try {
+                const vp = cornerstone.getViewport(element);
+                if (!vp || !vp.voi) return;
+
+                wlDrag.active = true;
+                wlDrag.startX = x;
+                wlDrag.startY = y;
+                wlDrag.startWW = vp.voi.windowWidth;
+                wlDrag.startWC = vp.voi.windowCenter;
+            } catch (e) {
+                // Viewport not ready
+            }
+        }
+
+        function handleWLDrag(x, y) {
+            try {
+                const vp = cornerstone.getViewport(element);
+                if (!vp || !vp.voi) return;
+
+                const deltaX = x - wlDrag.startX;
+                const deltaY = y - wlDrag.startY;
+
+                // Sensitivity: adjust these multipliers for responsiveness
+                const sensitivity = Math.max(1, wlDrag.startWW / 100);
+
+                // Horizontal = Window Width (contrast)
+                // Vertical = Window Center (brightness)
+                vp.voi.windowWidth = Math.max(1, wlDrag.startWW + (deltaX * sensitivity));
+                vp.voi.windowCenter = wlDrag.startWC - (deltaY * sensitivity);
+
+                cornerstone.setViewport(element, vp);
+                updateWLDisplay();
+            } catch (e) {
+                // Viewport not available
+            }
+        }
+
+        // Double-click to reset W/L to default
+        element.addEventListener('dblclick', () => {
+            if (state.defaultViewport && state.defaultViewport.voi) {
+                const vp = cornerstone.getViewport(element);
+                vp.voi.windowWidth = state.defaultViewport.voi.windowWidth;
+                vp.voi.windowCenter = state.defaultViewport.voi.windowCenter;
+                cornerstone.setViewport(element, vp);
+                updateWLDisplay();
+                logToScreen("Reset W/L to default");
+            }
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            // Don't capture if typing in input
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+            // F key = Fit to window
+            if (e.key === 'f' || e.key === 'F') {
+                e.preventDefault();
+                fitToWindow();
+                return;
+            }
+
+            // Spacebar toggles play/pause
+            if (e.key === ' ' || e.code === 'Space') {
+                e.preventDefault();
+                toggleCinePlay();
+                return;
+            }
+
+            if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                if (cine.playing) stopCine();
+                if (state.currentImageIndex < state.imageIds.length - 1) {
+                    loadAndDisplayImage(state.currentImageIndex + 1);
+                }
+            } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+                e.preventDefault();
+                if (cine.playing) stopCine();
+                if (state.currentImageIndex > 0) {
+                    loadAndDisplayImage(state.currentImageIndex - 1);
+                }
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            cornerstone.resize(element);
+        });
+
+        // Initialize loop icon state
+        document.getElementById('loop-icon').classList.add('text-primary');
+
+        // --- METADATA INSPECTOR ---
+
+        const metadataState = {
+            isOpen: false,
+            currentTags: [],
+            currentCategory: 'all',
+            searchQuery: ''
+        };
+
+        // DICOM Tag Dictionary (comprehensive - 100+ common tags)
+        const DICOM_DICTIONARY = {
+            // === PATIENT MODULE ===
+            '00100010': { name: 'Patient Name', category: 'patient', phi: true },
+            '00100020': { name: 'Patient ID', category: 'patient', phi: true },
+            '00100021': { name: 'Issuer of Patient ID', category: 'patient', phi: true },
+            '00100030': { name: 'Patient Birth Date', category: 'patient', phi: true },
+            '00100032': { name: 'Patient Birth Time', category: 'patient', phi: true },
+            '00100040': { name: 'Patient Sex', category: 'patient', phi: false },
+            '00101000': { name: 'Other Patient IDs', category: 'patient', phi: true },
+            '00101001': { name: 'Other Patient Names', category: 'patient', phi: true },
+            '00101010': { name: 'Patient Age', category: 'patient', phi: false },
+            '00101020': { name: 'Patient Size', category: 'patient', phi: false },
+            '00101030': { name: 'Patient Weight', category: 'patient', phi: false },
+            '00102160': { name: 'Ethnic Group', category: 'patient', phi: false },
+            '00104000': { name: 'Patient Comments', category: 'patient', phi: true },
+
+            // === STUDY MODULE ===
+            '0020000d': { name: 'Study Instance UID', category: 'study', phi: false },
+            '00080020': { name: 'Study Date', category: 'study', phi: true },
+            '00080021': { name: 'Series Date', category: 'study', phi: true },
+            '00080022': { name: 'Acquisition Date', category: 'study', phi: true },
+            '00080023': { name: 'Content Date', category: 'study', phi: true },
+            '00080030': { name: 'Study Time', category: 'study', phi: true },
+            '00080031': { name: 'Series Time', category: 'study', phi: true },
+            '00080032': { name: 'Acquisition Time', category: 'study', phi: true },
+            '00080033': { name: 'Content Time', category: 'study', phi: true },
+            '00080050': { name: 'Accession Number', category: 'study', phi: true },
+            '00080051': { name: 'Issuer of Accession Number', category: 'study', phi: true },
+            '00080090': { name: 'Referring Physician', category: 'study', phi: true },
+            '00081030': { name: 'Study Description', category: 'study', phi: false },
+            '00081032': { name: 'Procedure Code Sequence', category: 'study', phi: false },
+            '00200010': { name: 'Study ID', category: 'study', phi: false },
+
+            // === SERIES MODULE ===
+            '0020000e': { name: 'Series Instance UID', category: 'study', phi: false },
+            '00080060': { name: 'Modality', category: 'study', phi: false },
+            '0008103e': { name: 'Series Description', category: 'study', phi: false },
+            '00200011': { name: 'Series Number', category: 'study', phi: false },
+            '00180015': { name: 'Body Part Examined', category: 'study', phi: false },
+            '00185100': { name: 'Patient Position', category: 'study', phi: false },
+            '00081050': { name: 'Performing Physician', category: 'study', phi: true },
+            '00081070': { name: 'Operators Name', category: 'study', phi: true },
+
+            // === EQUIPMENT MODULE ===
+            '00080070': { name: 'Manufacturer', category: 'study', phi: false },
+            '00080080': { name: 'Institution Name', category: 'study', phi: true },
+            '00080081': { name: 'Institution Address', category: 'study', phi: true },
+            '00081010': { name: 'Station Name', category: 'study', phi: true },
+            '00081040': { name: 'Institutional Department', category: 'study', phi: true },
+            '00081090': { name: 'Manufacturer Model Name', category: 'study', phi: false },
+            '00181000': { name: 'Device Serial Number', category: 'study', phi: true },
+            '00181020': { name: 'Software Versions', category: 'study', phi: false },
+            '00181030': { name: 'Protocol Name', category: 'study', phi: false },
+
+            // === IMAGE MODULE ===
+            '00080016': { name: 'SOP Class UID', category: 'image', phi: false },
+            '00080018': { name: 'SOP Instance UID', category: 'image', phi: false },
+            '00200013': { name: 'Instance Number', category: 'image', phi: false },
+            '00200012': { name: 'Acquisition Number', category: 'image', phi: false },
+            '00280002': { name: 'Samples Per Pixel', category: 'image', phi: false },
+            '00280004': { name: 'Photometric Interpretation', category: 'image', phi: false },
+            '00280010': { name: 'Rows', category: 'image', phi: false },
+            '00280011': { name: 'Columns', category: 'image', phi: false },
+            '00280030': { name: 'Pixel Spacing', category: 'image', phi: false },
+            '00280100': { name: 'Bits Allocated', category: 'image', phi: false },
+            '00280101': { name: 'Bits Stored', category: 'image', phi: false },
+            '00280102': { name: 'High Bit', category: 'image', phi: false },
+            '00280103': { name: 'Pixel Representation', category: 'image', phi: false },
+            '00281050': { name: 'Window Center', category: 'image', phi: false },
+            '00281051': { name: 'Window Width', category: 'image', phi: false },
+            '00281052': { name: 'Rescale Intercept', category: 'image', phi: false },
+            '00281053': { name: 'Rescale Slope', category: 'image', phi: false },
+            '00281054': { name: 'Rescale Type', category: 'image', phi: false },
+
+            // === GEOMETRY / POSITION ===
+            '00200032': { name: 'Image Position (Patient)', category: 'image', phi: false },
+            '00200037': { name: 'Image Orientation (Patient)', category: 'image', phi: false },
+            '00201041': { name: 'Slice Location', category: 'image', phi: false },
+            '00180050': { name: 'Slice Thickness', category: 'image', phi: false },
+            '00180088': { name: 'Spacing Between Slices', category: 'image', phi: false },
+            '00180091': { name: 'Echo Train Length', category: 'image', phi: false },
+
+            // === CT SPECIFIC ===
+            '00180060': { name: 'KVP', category: 'image', phi: false },
+            '00181150': { name: 'Exposure Time', category: 'image', phi: false },
+            '00181151': { name: 'X-Ray Tube Current', category: 'image', phi: false },
+            '00181152': { name: 'Exposure', category: 'image', phi: false },
+            '00181160': { name: 'Filter Type', category: 'image', phi: false },
+            '00181210': { name: 'Convolution Kernel', category: 'image', phi: false },
+            '00189306': { name: 'Single Collimation Width', category: 'image', phi: false },
+            '00189307': { name: 'Total Collimation Width', category: 'image', phi: false },
+            '00189311': { name: 'Spiral Pitch Factor', category: 'image', phi: false },
+            '00181100': { name: 'Reconstruction Diameter', category: 'image', phi: false },
+            '00181120': { name: 'Gantry/Detector Tilt', category: 'image', phi: false },
+            '00181130': { name: 'Table Height', category: 'image', phi: false },
+            '00181140': { name: 'Rotation Direction', category: 'image', phi: false },
+
+            // === MR SPECIFIC ===
+            '00180020': { name: 'Scanning Sequence', category: 'image', phi: false },
+            '00180021': { name: 'Sequence Variant', category: 'image', phi: false },
+            '00180022': { name: 'Scan Options', category: 'image', phi: false },
+            '00180023': { name: 'MR Acquisition Type', category: 'image', phi: false },
+            '00180024': { name: 'Sequence Name', category: 'image', phi: false },
+            '00180025': { name: 'Angio Flag', category: 'image', phi: false },
+            '00180080': { name: 'Repetition Time (TR)', category: 'image', phi: false },
+            '00180081': { name: 'Echo Time (TE)', category: 'image', phi: false },
+            '00180082': { name: 'Inversion Time', category: 'image', phi: false },
+            '00180083': { name: 'Number of Averages', category: 'image', phi: false },
+            '00180084': { name: 'Imaging Frequency', category: 'image', phi: false },
+            '00180085': { name: 'Imaged Nucleus', category: 'image', phi: false },
+            '00180086': { name: 'Echo Number', category: 'image', phi: false },
+            '00180087': { name: 'Magnetic Field Strength', category: 'image', phi: false },
+            '00180089': { name: 'Number of Phase Steps', category: 'image', phi: false },
+            '00180093': { name: 'Percent Sampling', category: 'image', phi: false },
+            '00180094': { name: 'Percent Phase FOV', category: 'image', phi: false },
+            '00180095': { name: 'Pixel Bandwidth', category: 'image', phi: false },
+            '00181310': { name: 'Acquisition Matrix', category: 'image', phi: false },
+            '00181312': { name: 'Phase Encoding Direction', category: 'image', phi: false },
+            '00181314': { name: 'Flip Angle', category: 'image', phi: false },
+            '00181316': { name: 'SAR', category: 'image', phi: false },
+
+            // === FRAME OF REFERENCE ===
+            '00200052': { name: 'Frame of Reference UID', category: 'image', phi: false },
+            '00201040': { name: 'Position Reference Indicator', category: 'image', phi: false },
+
+            // === TRANSFER SYNTAX / FILE META ===
+            '00020000': { name: 'File Meta Info Length', category: 'image', phi: false },
+            '00020001': { name: 'File Meta Version', category: 'image', phi: false },
+            '00020002': { name: 'Media Storage SOP Class', category: 'image', phi: false },
+            '00020003': { name: 'Media Storage SOP Instance', category: 'image', phi: false },
+            '00020010': { name: 'Transfer Syntax UID', category: 'image', phi: false },
+            '00020012': { name: 'Implementation Class UID', category: 'image', phi: false },
+            '00020013': { name: 'Implementation Version', category: 'image', phi: false },
+            '00020016': { name: 'Source Application Entity', category: 'image', phi: true },
+
+            // === PIXEL DATA ===
+            '7fe00010': { name: 'Pixel Data', category: 'image', phi: false },
+
+            // === PRIVATE TAGS (common) ===
+            '00090010': { name: 'Private Creator', category: 'image', phi: false },
+        };
+
+        // PHI Tag IDs (for quick lookup)
+        const PHI_TAGS = Object.entries(DICOM_DICTIONARY)
+            .filter(([k, v]) => v.phi)
+            .map(([k]) => k);
+
+        function toggleMetadataPanel() {
+            const panel = document.getElementById('metadata-panel');
+            metadataState.isOpen = !metadataState.isOpen;
+
+            if (metadataState.isOpen) {
+                panel.classList.remove('translate-x-full');
+                loadCurrentImageMetadata();
+            } else {
+                panel.classList.add('translate-x-full');
+            }
+        }
+
+        async function loadCurrentImageMetadata() {
+            const currentImg = state.imageIds[state.currentImageIndex];
+            if (!currentImg) {
+                document.getElementById('metadata-list').innerHTML = '<div class="text-gray-500 text-center py-8">No image loaded</div>';
+                return;
+            }
+
+            document.getElementById('metadata-file').innerText = currentImg.name;
+
+            try {
+                // Get the stored ArrayBuffer from our map
+                const arrayBuffer = state.fileBlobs.get(currentImg.id);
+
+                if (!arrayBuffer) {
+                    document.getElementById('metadata-list').innerHTML = '<div class="text-gray-500 text-center py-8">File data not available (reload files)</div>';
+                    return;
+                }
+
+                const byteArray = new Uint8Array(arrayBuffer);
+                const dataSet = dicomParser.parseDicom(byteArray);
+
+                // Extract all tags
+                metadataState.currentTags = [];
+                let hasPHI = false;
+
+                for (const tag in dataSet.elements) {
+                    const element = dataSet.elements[tag];
+                    const tagId = tag.replace('x', '').toLowerCase();
+                    const dictEntry = DICOM_DICTIONARY[tagId];
+
+                    let value = '';
+                    try {
+                        if (element.vr === 'SQ') {
+                            value = '[Sequence]';
+                        } else if (element.length > 100) {
+                            value = `[Binary Data: ${element.length} bytes]`;
+                        } else {
+                            value = dataSet.string(tag) || '';
+                        }
+                    } catch (e) {
+                        value = '[Unable to read]';
+                    }
+
+                    const isPHI = dictEntry?.phi || PHI_TAGS.includes(tagId);
+                    if (isPHI && value && value !== '[Sequence]') hasPHI = true;
+
+                    metadataState.currentTags.push({
+                        tag: tagId.toUpperCase(),
+                        name: dictEntry?.name || `Unknown (${tag})`,
+                        value: value,
+                        category: dictEntry?.category || 'other',
+                        isPHI: isPHI
+                    });
+                }
+
+                // Show/hide PHI warning
+                document.getElementById('phi-warning').classList.toggle('hidden', !hasPHI);
+
+                // Update count
+                document.getElementById('metadata-count').innerText = `${metadataState.currentTags.length} tags`;
+
+                // Render
+                renderMetadataList();
+
+            } catch (e) {
+                console.error("Metadata parse error:", e);
+                document.getElementById('metadata-list').innerHTML = '<div class="text-red-400 text-center py-8">Error parsing DICOM metadata</div>';
+            }
+        }
+
+        function renderMetadataList() {
+            const listEl = document.getElementById('metadata-list');
+            let filtered = metadataState.currentTags;
+
+            // Filter by category
+            if (metadataState.currentCategory !== 'all') {
+                filtered = filtered.filter(t => t.category === metadataState.currentCategory);
+            }
+
+            // Filter by search
+            if (metadataState.searchQuery) {
+                const q = metadataState.searchQuery.toLowerCase();
+                filtered = filtered.filter(t =>
+                    t.name.toLowerCase().includes(q) ||
+                    t.tag.toLowerCase().includes(q) ||
+                    t.value.toLowerCase().includes(q)
+                );
+            }
+
+            if (filtered.length === 0) {
+                listEl.innerHTML = '<div class="text-gray-500 text-center py-8">No matching tags</div>';
+                return;
+            }
+
+            listEl.innerHTML = filtered.map(t => `
+                <div class="bg-gray-800 rounded p-2 ${t.isPHI ? 'border-l-2 border-yellow-500' : ''}">
+                    <div class="flex justify-between items-start">
+                        <span class="text-gray-400 font-mono">(${t.tag})</span>
+                        ${t.isPHI ? '<span class="text-yellow-400 text-[10px] uppercase">PHI</span>' : ''}
+                    </div>
+                    <div class="text-primary font-medium">${t.name}</div>
+                    <div class="text-gray-200 break-all mt-1">${escapeHtml(t.value) || '<span class="text-gray-600">(empty)</span>'}</div>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function filterMetadata(query) {
+            metadataState.searchQuery = query;
+            renderMetadataList();
+        }
+
+        function setMetadataCategory(cat) {
+            metadataState.currentCategory = cat;
+
+            // Update tab UI
+            ['all', 'patient', 'study', 'image'].forEach(c => {
+                const btn = document.getElementById(`cat-${c}`);
+                if (c === cat) {
+                    btn.classList.add('text-primary', 'border-b-2', 'border-primary');
+                    btn.classList.remove('text-gray-400');
+                } else {
+                    btn.classList.remove('text-primary', 'border-b-2', 'border-primary');
+                    btn.classList.add('text-gray-400');
+                }
+            });
+
+            renderMetadataList();
+        }
+
+        // Auto-refresh metadata when image changes
+        const originalLoadAndDisplay = loadAndDisplayImage;
+        loadAndDisplayImage = async function (index) {
+            await originalLoadAndDisplay(index);
+            if (metadataState.isOpen) {
+                loadCurrentImageMetadata();
+            }
+        };
+
+    </script>
+</body>
+
+</html>

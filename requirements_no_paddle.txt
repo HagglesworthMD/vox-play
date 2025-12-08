@@ -1,0 +1,6 @@
+streamlit
+pydicom
+numpy
+opencv-python-headless
+streamlit-drawable-canvas
+Pillow

@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Local config
+*.local
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# DICOM test files (large)
+*.dcm
+!src/sample_data/*.dcm
+
+# NIfTI files (large)
+*.nii
+*.nii.gz
+
+# Generated outputs
+output/
+exports/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Test outputs
+test_*.png
+test_*.mp4
+studies/
+
+# Build artifacts
+*.zip

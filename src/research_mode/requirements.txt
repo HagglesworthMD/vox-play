@@ -1,0 +1,16 @@
+# Research Mode DICOM Anonymization Module
+# HIPAA Safe Harbor & DICOM PS3.15 Compliant
+# Supports Hybrid Anonymization (Metadata + Pixel Masking)
+
+# Core dependencies
+pydicom>=2.4.0
+numpy>=1.24.0
+
+# Image processing for pixel masking
+Pillow>=10.0.0
+
+# Testing
+pytest>=7.4.0
+
+# Optional: For enhanced date handling
+python-dateutil>=2.8.0

@@ -31,17 +31,41 @@ VoxelMask is a professional-grade DICOM processing platform designed for healthc
 
 ## 📋 Table of Contents
 
-1. [Use Cases](#-use-cases)
-2. [Key Features](#-key-features)
-3. [Operating Modes](#-operating-modes)
-4. [DICOM Compliance Engine](#-dicom-compliance-engine)
-5. [DICOM Viewer](#-dicom-viewer)
-6. [Output Formats](#-output-formats)
-7. [System Requirements & Compatibility](#-system-requirements--compatibility)
-8. [Installation](#-installation)
-9. [Architecture](#-architecture)
-10. [API Reference](#-api-reference)
-11. [Security & Audit](#-security--audit)
+1. [Quick Upload](#-quick-upload---no-pre-processing-required)
+2. [Use Cases](#-use-cases)
+3. [Key Features](#-key-features)
+4. [Operating Modes](#-operating-modes)
+5. [DICOM Compliance Engine](#-dicom-compliance-engine)
+6. [DICOM Viewer](#-dicom-viewer)
+7. [Output Formats](#-output-formats)
+8. [System Requirements & Compatibility](#-system-requirements--compatibility)
+9. [Installation](#-installation)
+10. [Architecture](#-architecture)
+11. [API Reference](#-api-reference)
+12. [Security & Audit](#-security--audit)
+
+---
+
+## 📥 Quick Upload - No Pre-Processing Required
+
+**VoxelMask accepts DICOM files directly from your PACS viewer or workstation.**
+
+Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt, Sante, InteleViewer, etc.) and upload it directly to VoxelMask. No need to:
+- ❌ Extract or unzip files first
+- ❌ Convert to a specific format
+- ❌ Remove existing viewers or metadata
+- ❌ Organize folder structure
+
+**Supported Input Formats**:
+| Format | Support |
+|--------|---------|
+| Single DICOM file | ✅ |
+| Multiple DICOM files | ✅ |
+| ZIP archive (from any viewer) | ✅ |
+| Nested folder structures | ✅ |
+| Mixed modalities in one upload | ✅ |
+
+> 💡 **Tip**: Most PACS viewers have an "Export to ZIP" or "Download Study" option. Use that directly - VoxelMask will automatically detect and process all DICOM files inside, ignoring any bundled viewers or non-DICOM files.
 
 ---
 

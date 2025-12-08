@@ -1674,10 +1674,11 @@ if uploaded_files:
                     with zipfile.ZipFile(zip_path, 'r') as zf:
                         zf.extractall(temp_dir)
                     
-                    # Find all DICOM files
+                    # Find all DICOM files (skip HTML, CSS, JS, text files)
+                    skip_extensions = ('.html', '.htm', '.css', '.js', '.txt', '.md', '.json', '.xml', '.pdf', '.doc', '.docx')
                     for root, dirs, files in os.walk(temp_dir):
                         for file in files:
-                            if not file.startswith('.') and not file.startswith('__'):
+                            if not file.startswith('.') and not file.startswith('__') and not file.lower().endswith(skip_extensions):
                                 file_path = os.path.join(root, file)
                                 try:
                                     with open(file_path, 'rb') as f:
@@ -1699,8 +1700,10 @@ if uploaded_files:
             except Exception as e:
                 st.error(f"Error extracting ZIP: {e}")
         else:
-            # Regular file - add directly
-            dicom_files.append(uploaded_file)
+            # Regular file - filter out non-DICOM files (HTML, CSS, JS, text, etc.)
+            skip_extensions = ('.html', '.htm', '.css', '.js', '.txt', '.md', '.json', '.xml', '.pdf', '.doc', '.docx')
+            if not uploaded_file.name.lower().endswith(skip_extensions):
+                dicom_files.append(uploaded_file)
 
 # Store uploaded files in session state to persist across form interactions
 # Clear manifest selections if this is a new upload (different files)
@@ -2685,17 +2688,17 @@ if st.session_state.get('uploaded_dicom_files'):
                                     profile_mode=pacs_operation_mode,
                                     fix_uids=regenerate_uids
                                 )
-                            
-                            # Save the compliant dataset back to disk
-                            verification_ds.save_as(output_path)
-                            
-                            # Log compliance processing info
-                            compliance_log_entry = f"Compliance: {pacs_operation_mode}"
-                            if regenerate_uids:
-                                compliance_log_entry += " | UIDs Regenerated"
-                            if compliance_info.get('date_shift_days'):
-                                compliance_log_entry += f" | Date Shift: {compliance_info['date_shift_days']} days"
+                                
+                                # Log compliance processing info (only for non-FOI modes)
+                                compliance_log_entry = f"Compliance: {pacs_operation_mode}"
+                                if regenerate_uids:
+                                    compliance_log_entry += " | UIDs Regenerated"
+                                if compliance_info.get('date_shift_days'):
+                                    compliance_log_entry += f" | Date Shift: {compliance_info['date_shift_days']} days"
                             # ═══════════════════════════════════════════════════════════════
+                            
+                            # Save the processed dataset back to disk
+                            verification_ds.save_as(output_path)
                             
                             # Read processed file for download (now includes compliance changes)
                             with open(output_path, "rb") as f:
@@ -2801,7 +2804,9 @@ if st.session_state.get('uploaded_dicom_files'):
                                 safety_notification=None,
                                 compliance_profile=pacs_operation_mode,  # Use PACS operation mode
                                 pixel_action_reason=(f"Batch mask applied | {compliance_log_entry}" if apply_mask else compliance_log_entry),
-                                dataset=verification_ds
+                                dataset=verification_ds,
+                                is_foi_mode=is_foi_mode,
+                                foi_redactions=compliance_info.get('foi_result', {}).redactions if is_foi_mode and compliance_info.get('foi_result') else None
                             )
                         
                         # Append compliance processing log to audit

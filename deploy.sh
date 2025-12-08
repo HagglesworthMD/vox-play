@@ -19,6 +19,6 @@ cp -r ./.streamlit "$TARGET_DIR/" 2>/dev/null || true
 
 echo "🔄 Restarting Docker container..."
 cd "$TARGET_DIR"
-sudo docker-compose restart voxelmask-engine
+sudo docker compose restart voxelmask-engine
 
 echo "🚀 VoxelMask v1.0 Deployed and Restarted!"

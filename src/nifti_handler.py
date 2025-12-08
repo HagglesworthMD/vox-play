@@ -27,10 +27,17 @@ from datetime import datetime
 import numpy as np
 import pydicom
 
-# NIfTI libraries - required
-import dicom2nifti
-import dicom2nifti.settings as nifti_settings
-import nibabel as nib
+# NIfTI libraries - optional (not needed for core DICOM processing)
+NIFTI_AVAILABLE = False
+try:
+    import dicom2nifti
+    import dicom2nifti.settings as nifti_settings
+    import nibabel as nib
+    NIFTI_AVAILABLE = True
+except ImportError:
+    dicom2nifti = None
+    nifti_settings = None
+    nib = None
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -399,8 +406,8 @@ class NiftiConverter:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def check_dicom2nifti_available() -> bool:
-    """Check if dicom2nifti is available (always True - required dependency)."""
-    return True
+    """Check if dicom2nifti is available."""
+    return NIFTI_AVAILABLE
 
 
 def convert_dataset_to_nifti(

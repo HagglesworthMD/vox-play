@@ -23,9 +23,13 @@ import io
 
 try:
     from fpdf import FPDF
+    FPDF_AVAILABLE = True
 except ImportError:
-    # Fallback - will raise error if used without fpdf
-    FPDF = None
+    # Create a stub base class when fpdf is not installed
+    FPDF_AVAILABLE = False
+    class FPDF:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("fpdf2 is required. Install with: pip install fpdf2")
 
 
 class VoxelMaskPDF(FPDF):
@@ -72,7 +76,7 @@ class PDFReporter:
     """
     
     def __init__(self):
-        if FPDF is None:
+        if not FPDF_AVAILABLE:
             raise ImportError("fpdf2 is required. Install with: pip install fpdf2")
     
     def create_pdf(

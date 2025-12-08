@@ -87,7 +87,9 @@ def generate_audit_receipt(
     safety_notification: Optional[str] = None,
     compliance_profile: str = "safe_harbor",
     pixel_action_reason: Optional[str] = None,
-    dataset: Optional['pydicom.Dataset'] = None
+    dataset: Optional['pydicom.Dataset'] = None,
+    is_foi_mode: bool = False,
+    foi_redactions: Optional[list] = None
 ) -> str:
     """
     Generate a professional audit receipt for DICOM de-identification operations.
@@ -113,27 +115,41 @@ def generate_audit_receipt(
     # SOURCE OF TRUTH OVERRIDE
     # If the actual dataset is provided, use its values instead of the dictionary.
     if dataset:
-        # ACCESSION NUMBER FIX: Force to 'REMOVED' in the log report since we delete it
-        new_meta['accession'] = 'REMOVED'
-        new_meta['accession_number'] = 'REMOVED'
+        # FOI MODE: Preserve accession number (legal chain of custody)
+        # RESEARCH MODE: Force to 'REMOVED' since we delete it
+        if not is_foi_mode:
+            new_meta['accession'] = 'REMOVED'
+            new_meta['accession_number'] = 'REMOVED'
+        else:
+            # FOI mode - preserve the actual accession from dataset
+            if hasattr(dataset, 'AccessionNumber') and dataset.AccessionNumber:
+                new_meta['accession'] = str(dataset.AccessionNumber)
+                new_meta['accession_number'] = str(dataset.AccessionNumber)
         
         # STUDY DATE FIX: Force the log to reflect the actual StudyDate from the file
         if "StudyDate" in dataset:
             val = dataset.StudyDate
             final_date = val.value if hasattr(val, 'value') else str(val)
             new_meta['new_study_date'] = final_date
-            # Optional: If you want the "Original Date" field to also show the new date, update it too:
-            # new_meta['study_date'] = final_date 
     # ----------------------------------------------------------
     
     # Determine reason code based on mode
-    reason_code = "CLINICAL_CORRECTION" if mode.upper() == "CLINICAL" else "RESEARCH_DEID"
+    if is_foi_mode:
+        reason_code = "FOI_LEGAL_RELEASE"
+    elif mode.upper() == "CLINICAL":
+        reason_code = "CLINICAL_CORRECTION"
+    else:
+        reason_code = "RESEARCH_DEID"
     
     # Determine metadata sanitization details based on mode
     is_research = mode.upper() == "RESEARCH" or "DE-ID" in mode.upper()
     is_clinical = mode.upper() == "CLINICAL" or "CORRECTION" in mode.upper()
     
-    if is_research:
+    if is_foi_mode:
+        metadata_disposition = "PRESERVED (FOI Legal Release - Staff names redacted)"
+        private_tags_status = "REMOVED (Vendor-specific)"
+        uids_status = "PRESERVED (Chain of Custody)"
+    elif is_research:
         metadata_disposition = "STRIPPED & ANONYMIZED (Safe for Research)"
         private_tags_status = "REMOVED"
         uids_status = "REMAPPED (Deterministic)"
@@ -243,18 +259,53 @@ def generate_audit_receipt(
         f"Private Tags:   {private_tags_status}",
         f"UIDs:           {uids_status}",
         "",
-        "▶ COMPLIANCE CERTIFICATION",
-        "─────────────────────────────────────────────────────────────────────────────────",
-        f"Standard Used: DICOM PS3.15 / HIPAA {'Safe Harbor' if compliance_profile == 'safe_harbor' else 'Limited Data Set'}",
-        "✓ OAIC/APP 11: Compliant",
-        "✓ PatientIdentityRemoved: YES",
-        "✓ BurnedInAnnotation: NO",
-        "✓ Safe for Research Use: " + ("YES" if is_research else "NO - Clinical Only"),
-        "",
-        "═══════════════════════════════════════════════════════════════════════════════",
-        "This audit log constitutes a legal record of the de-identification process.",
-        "Retain this receipt for compliance verification and audit purposes.",
-        "═══════════════════════════════════════════════════════════════════════════════"
     ])
+    
+    # FOI-specific compliance section
+    if is_foi_mode:
+        audit_lines.extend([
+            "▶ FOI RELEASE CERTIFICATION",
+            "─────────────────────────────────────────────────────────────────────────────────",
+            "Release Type:       Freedom of Information / Legal Discovery",
+            "✓ Patient Data:     PRESERVED (Name, ID, DOB, Dates)",
+            "✓ Accession Number: PRESERVED (Chain of Custody)",
+            "✓ Study UIDs:       PRESERVED (Forensic Integrity)",
+            "✓ Staff Names:      REDACTED (Employee Privacy)",
+            "✓ Private Tags:     REMOVED (Vendor-specific data)",
+        ])
+        
+        # Add specific redactions if available
+        if foi_redactions:
+            audit_lines.append("")
+            audit_lines.append("Staff Redactions Performed:")
+            for redaction in foi_redactions:
+                tag_name = redaction.get('tag', 'Unknown')
+                action = redaction.get('action', 'Redacted')
+                audit_lines.append(f"  • {tag_name}: {action}")
+        
+        audit_lines.extend([
+            "",
+            "═══════════════════════════════════════════════════════════════════════════════",
+            "This audit log constitutes a legal record of the FOI processing.",
+            "Patient-identifying data has been PRESERVED for legal chain of custody.",
+            "Staff-identifying data has been REDACTED for employee privacy protection.",
+            "═══════════════════════════════════════════════════════════════════════════════"
+        ])
+    else:
+        # Standard research/clinical compliance section
+        audit_lines.extend([
+            "▶ COMPLIANCE CERTIFICATION",
+            "─────────────────────────────────────────────────────────────────────────────────",
+            f"Standard Used: DICOM PS3.15 / HIPAA {'Safe Harbor' if compliance_profile == 'safe_harbor' else 'Limited Data Set'}",
+            "✓ OAIC/APP 11: Compliant",
+            "✓ PatientIdentityRemoved: YES",
+            "✓ BurnedInAnnotation: NO",
+            "✓ Safe for Research Use: " + ("YES" if is_research else "NO - Clinical Only"),
+            "",
+            "═══════════════════════════════════════════════════════════════════════════════",
+            "This audit log constitutes a legal record of the de-identification process.",
+            "Retain this receipt for compliance verification and audit purposes.",
+            "═══════════════════════════════════════════════════════════════════════════════"
+        ])
 
     return "\n".join(audit_lines)

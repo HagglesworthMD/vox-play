@@ -151,7 +151,7 @@
                 </div>
                 <h1
                     class="font-bold text-lg tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-gray-100 to-gray-400">
-                    OmniDICOM <span
+                    VoxelMask <span
                         class="text-xs text-red-400 border border-red-900 bg-red-900/20 px-1 rounded ml-2">DEBUG
                         MODE</span></h1>
             </div>
@@ -810,6 +810,8 @@
             '.bmp', '.gif',
             // XML configs (usually not useful to display)
             '.xml',
+            // Web files (not medical documents)
+            '.html', '.htm', '.css', '.js',
         ];
 
         function getFileExtension(filename) {
@@ -1196,14 +1198,10 @@
         }
 
         // Modality-specific window/level defaults
+        // Strategy: Trust embedded DICOM W/L first, then use modality-specific fallbacks
         const MODALITY_DEFAULTS = {
-            'US': { autoCalc: true },           // Ultrasound - auto calculate from pixel data
+            'US': { autoCalc: true },           // Ultrasound - often needs auto-calc
             'SC': { autoCalc: true },           // Secondary Capture
-            'XA': { ww: 2000, wc: 1000 },       // X-Ray Angiography
-            'CR': { ww: 2000, wc: 1000 },       // Computed Radiography
-            'DX': { ww: 2000, wc: 1000 },       // Digital X-Ray
-            'MG': { ww: 3000, wc: 1500 },       // Mammography
-            'RF': { ww: 2000, wc: 1000 },       // Radiofluoroscopy
             'OT': { autoCalc: true },           // Other
             'PT': { autoCalc: true },           // PET
             'NM': { autoCalc: true },           // Nuclear Medicine
@@ -1215,46 +1213,55 @@
             if (!arrayBuffer) return;
 
             let modality = 'CT'; // Default
+            let dicomWindowWidth = null;
+            let dicomWindowCenter = null;
+
             try {
                 const byteArray = new Uint8Array(arrayBuffer);
                 const dataSet = dicomParser.parseDicom(byteArray);
                 modality = dataSet.string('x00080060') || 'CT';
+
+                // Read embedded Window/Level from DICOM (tag 0028,1050 and 0028,1051)
+                dicomWindowCenter = parseFloat(dataSet.string('x00281050'));
+                dicomWindowWidth = parseFloat(dataSet.string('x00281051'));
             } catch (e) {
-                return; // Can't determine modality
+                // Continue with viewport values
             }
 
             const vp = cornerstone.getViewport(element);
 
-            // Check if DICOM has embedded W/L values that look reasonable
-            const dicomWW = vp.voi?.windowWidth;
-            const dicomWC = vp.voi?.windowCenter;
-
-            // For certain modalities, DICOM values are usually correct
-            if (['CT', 'MR'].includes(modality) && dicomWW && dicomWW > 0) {
-                // Trust the DICOM values for CT/MR
+            // First priority: Use embedded DICOM Window/Level if present and valid
+            if (dicomWindowWidth && dicomWindowWidth > 0 && dicomWindowCenter !== null && !isNaN(dicomWindowCenter)) {
+                vp.voi.windowWidth = dicomWindowWidth;
+                vp.voi.windowCenter = dicomWindowCenter;
+                cornerstone.setViewport(element, vp);
+                logToScreen(`Using DICOM W/L: W:${Math.round(dicomWindowWidth)} L:${Math.round(dicomWindowCenter)} [${modality}]`);
                 return;
             }
 
-            // Check modality defaults
+            // Second priority: Check if cornerstone loaded valid W/L from the file
+            const cornerstoneWW = vp.voi?.windowWidth;
+            const cornerstoneWC = vp.voi?.windowCenter;
+
+            if (cornerstoneWW && cornerstoneWW > 1 && cornerstoneWC !== undefined) {
+                // Cornerstone already has reasonable values from the file - trust them
+                logToScreen(`Using Cornerstone W/L: W:${Math.round(cornerstoneWW)} L:${Math.round(cornerstoneWC)} [${modality}]`);
+                return;
+            }
+
+            // Third priority: Check modality-specific auto-calc flag
             const modalityConfig = MODALITY_DEFAULTS[modality];
 
-            if (modalityConfig) {
-                if (modalityConfig.autoCalc) {
-                    // Auto-calculate W/L from pixel data range
-                    autoCalculateWindowLevel(image);
-                } else if (modalityConfig.ww && modalityConfig.wc) {
-                    // Apply preset
-                    vp.voi.windowWidth = modalityConfig.ww;
-                    vp.voi.windowCenter = modalityConfig.wc;
-                    cornerstone.setViewport(element, vp);
-                }
-            } else if (!dicomWW || dicomWW <= 1) {
-                // No modality config and bad DICOM values - auto calculate
-                autoCalculateWindowLevel(image);
+            if (modalityConfig && modalityConfig.autoCalc) {
+                // Auto-calculate W/L from pixel data range
+                autoCalculateWindowLevel(image, modality);
+            } else {
+                // All other modalities - auto-calculate as fallback
+                autoCalculateWindowLevel(image, modality);
             }
         }
 
-        function autoCalculateWindowLevel(image) {
+        function autoCalculateWindowLevel(image, modality = 'Unknown') {
             // Calculate optimal W/L from pixel statistics
             const pixelData = image.getPixelData();
 
@@ -1278,7 +1285,7 @@
                 vp.voi.windowWidth = ww;
                 vp.voi.windowCenter = wc;
                 cornerstone.setViewport(element, vp);
-                logToScreen(`Auto W/L: W:${Math.round(ww)} L:${Math.round(wc)}`);
+                logToScreen(`Auto W/L: W:${Math.round(ww)} L:${Math.round(wc)} [${modality}]`);
             }
         }
 

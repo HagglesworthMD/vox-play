@@ -50,7 +50,7 @@ VoxelMask is a professional-grade DICOM processing platform designed for healthc
 
 **VoxelMask accepts DICOM files directly from your PACS viewer or workstation.**
 
-Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt, Sante, InteleViewer, etc.) and upload it directly to VoxelMask. No need to:
+Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt, Sante, InteleViewer, ESMI VueMotion, etc.) and upload it directly to VoxelMask. No need to:
 - ❌ Extract or unzip files first
 - ❌ Convert to a specific format
 - ❌ Remove existing viewers or metadata

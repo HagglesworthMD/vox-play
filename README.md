@@ -5,12 +5,18 @@
 </p>
 
 <p align="center">
-  <strong>Version 2.0</strong> | Modality-Aware Safety Protocol v2.1 | Multi-Compliance Engine
+  <strong>Version 2.0 BETA</strong> | Modality-Aware Safety Protocol v2.1 | Multi-Compliance Engine
 </p>
 
 <p align="center">
   <em>A comprehensive web-based DICOM de-identification workstation for medical imaging workflows</em>
 </p>
+
+<p align="center">
+  ⚠️ <strong>BETA RELEASE</strong> ⚠️
+</p>
+
+> **⚠️ Beta Notice:** This software is currently in beta testing. While functional and tested, it may contain bugs or incomplete features. Not recommended for production clinical use without thorough validation. Please report any issues via GitHub Issues.
 
 ---
 

@@ -1,4 +1,4 @@
-# VoxelMask - User Guide
+# Voxelmask.io - User Guide
 
 **Intelligent De-Identification for Research & Clinical Correction**
 
@@ -6,7 +6,7 @@
 
 ## 🛡 The Modality-Aware Protocol
 
-VoxelMask automatically detects the risk level of your images and applies the appropriate de-identification strategy.
+Voxelmask.io identifies the risk level of your images based on modality and applies the appropriate de-identification strategy.
 
 ### 1. The "Zero-Loss" Pipeline (CT, MRI, NM, XA, DX)
 
@@ -64,7 +64,7 @@ VoxelMask automatically detects the risk level of your images and applies the ap
 
 - **Purpose:** Prepare data for research/commercial use
 - **PHI Status:** REMOVED (HIPAA Safe Harbor compliant)
-- **Pixel Handling:** Automatic modality-aware masking
+- **Pixel Handling:** Click-and-drag modality-aware masking
 - **Output:** Anonymized DICOM with compliance certificate
 
 ---
@@ -103,7 +103,7 @@ ANONYMIZATION_SALT=your-secret-salt
 
 ### Streamlit Theme
 
-VoxelMask uses a dark theme with cyan accents:
+Voxelmask.io uses a dark theme with cyan accents:
 - Primary Color: `#00d4ff`
 - Background: `#0e1117`
 - Secondary Background: `#262730`
@@ -140,4 +140,4 @@ VoxelMask uses a dark theme with cyan accents:
 
 ---
 
-*VoxelMask v1.0 - Intelligent DICOM De-Identification*
+*Voxelmask.io v0.3 - Intelligent DICOM De-Identification*

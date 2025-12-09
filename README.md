@@ -1,11 +1,11 @@
-# VoxelMask - Intelligent DICOM De-Identification Engine
+# Voxelmask.io - Intelligent DICOM De-Identification Engine
 
 <p align="center">
-  <img src="src/voxelmask_loading.png" alt="VoxelMask Logo" width="200"/>
+  <img src="src/VOXELMASK.png" alt="Voxelmask.io - Securing Medical Data. One Voxel at a Time." width="600"/>
 </p>
 
 <p align="center">
-  <strong>Version 2.0 BETA</strong> | Modality-Aware Safety Protocol v2.1 | Multi-Compliance Engine
+  <strong>Version 0.3 BETA</strong> | Modality-Aware Safety Protocol V1.0 | Multi-Compliance Engine V1.0
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
 
 ## 🛡️ Overview
 
-VoxelMask is a professional-grade DICOM processing platform designed for healthcare organizations, research institutions, AI/ML companies, and legal departments. It provides intelligent, modality-aware de-identification with full audit trail capabilities and multi-jurisdictional compliance support.
+Voxelmask.io is a professional-grade DICOM processing platform designed for healthcare organizations, research institutions, AI/ML companies, and legal departments. It provides intelligent, modality-aware de-identification with full audit trail capabilities and multi-jurisdictional compliance support.
 
 ### Core Operating Modes
 
@@ -54,9 +54,9 @@ VoxelMask is a professional-grade DICOM processing platform designed for healthc
 
 ## 📥 Quick Upload - No Pre-Processing Required
 
-**VoxelMask accepts DICOM files directly from your PACS viewer or workstation.**
+**Voxelmask.io accepts DICOM files directly from your PACS viewer or workstation.**
 
-Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt, Sante, InteleViewer, ESMI VueMotion, etc.) and upload it directly to VoxelMask. No need to:
+Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt, Sante, InteleViewer, ESMI VueMotion, etc.) and upload it directly to Voxelmask.io. No need to:
 - ❌ Extract or unzip files first
 - ❌ Convert to a specific format
 - ❌ Remove existing viewers or metadata
@@ -71,7 +71,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 | Nested folder structures | ✅ |
 | Mixed modalities in one upload | ✅ |
 
-> 💡 **Tip**: Most PACS viewers have an "Export to ZIP" or "Download Study" option. Use that directly - VoxelMask will automatically detect and process all DICOM files inside, ignoring any bundled viewers or non-DICOM files.
+> 💡 **Tip**: Most PACS viewers have an "Export to ZIP" or "Download Study" option. Use that directly - Voxelmask.io will automatically detect and process all DICOM files inside, ignoring any bundled viewers or non-DICOM files.
 
 ---
 
@@ -88,7 +88,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 - NIfTI export for ML pipelines (PyTorch, TensorFlow, MONAI)
 - Audit trail for regulatory compliance
 
-**VoxelMask Solution**:
+**Voxelmask.io Solution**:
 - **Research De-ID Mode** with HIPAA Safe Harbor profile
 - HMAC-SHA256 UID remapping for consistent anonymization
 - Date shifting preserves temporal relationships
@@ -107,7 +107,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 
 **Output**:
 - De-identified DICOM or NIfTI files
-- `VoxelMask_SafeHarborCertificate.pdf`
+- `Voxelmask.io_SafeHarborCertificate.pdf`
 - Quality audit with slice retention verification
 
 ---
@@ -122,7 +122,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 - Include viewer for patient access
 - Professional cover letter
 
-**VoxelMask Solution**:
+**Voxelmask.io Solution**:
 - **FOI Patient Mode** preserves chain of custody
 - Staff name redaction (Operators, Physicians)
 - Bundled DICOM Viewer for patient viewing
@@ -139,7 +139,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 
 **Output**:
 - Original DICOM files with staff names redacted
-- `VoxelMask_PatientRelease.pdf` (cover letter)
+- `Voxelmask.io_PatientRelease.pdf` (cover letter)
 - `DICOM_Viewer.html` for patient viewing
 - SHA-256 hash verification
 
@@ -156,7 +156,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 - Hash verification for court admissibility
 - Exclude worksheets/scanned documents (optional)
 
-**VoxelMask Solution**:
+**Voxelmask.io Solution**:
 - **FOI Legal Mode** maintains forensic integrity
 - UIDs preserved (no regeneration)
 - Staff name redaction with audit trail
@@ -175,7 +175,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 
 **Output**:
 - DICOM files with staff names redacted
-- `VoxelMask_ForensicCertificate.pdf`
+- `Voxelmask.io_ForensicCertificate.pdf`
 - Hash verification for court admissibility
 - Audit log with redaction details
 
@@ -197,7 +197,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 - Audit trail for corrections
 - Optional UID regeneration for duplicate fixes
 
-**VoxelMask Solution**:
+**Voxelmask.io Solution**:
 - **Clinical Correction Mode** with full audit trail
 - Toshiba/Aplio-style header overlay
 - Correction notes with timestamp
@@ -224,7 +224,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 - Australian OAIC compliance (if AU sites)
 - Date shifting with preserved intervals
 
-**VoxelMask Solution**:
+**Voxelmask.io Solution**:
 - **AU Strict (OAIC)** profile for Australian sites
 - **US Research (Safe Harbor)** for US sites
 - Secret salt for reproducible UID mapping
@@ -238,14 +238,14 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 
 - 🖥️ **Web-Based Interface** - Modern Streamlit UI with dark theme
 - 🛡️ **Multi-Compliance Engine** - HIPAA, OAIC (Australia), and custom profiles
-- 🔍 **Smart Pixel Masking** - Modality-aware burned-in PHI detection
+- 🔍 **Smart Pixel Masking** - Modality-aware burned-in PHI masking (click-and-drag)
 - 📋 **Professional Audit Trail** - PDF reports with SHA-256 verification
 - 📦 **Batch Processing** - Single files, multi-file uploads, and ZIP archives
 - 🎯 **Interactive Redaction** - Click-and-drag canvas for manual PHI masking
 - 🔐 **Forensic Integrity** - Chain of custody tracking for legal use
 - 📊 **NIfTI Export** - AI/ML-ready output format with quality audit
 
-### Modality-Aware Safety Protocol v2.1
+### Modality-Aware Safety Protocol V1.0
 
 | Modality | Masking Behavior | Reason |
 |----------|------------------|--------|
@@ -274,7 +274,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 
 #### Output
 - Corrected DICOM files
-- `VoxelMask_DataRepairLog.pdf`
+- `Voxelmask.io_DataRepairLog.pdf`
 - Bundled DICOM Viewer
 
 ---
@@ -291,14 +291,14 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 - **UID Remapping**: HMAC-SHA256 with secret salt
 - **Date Shifting**: -30 to -365 days (configurable)
 - **Text Cleaning**: SSN, phone, email, MRN patterns
-- **Pixel Masking**: Automatic for US/SC/OT modalities
+- **Pixel Masking**: Click-and-drag for US/SC/OT modalities
 
 #### Research Context Fields
 - Trial ID, Site ID, Subject ID, Time Point
 
 #### Output
 - De-identified DICOM or NIfTI files
-- `VoxelMask_SafeHarborCertificate.pdf`
+- `Voxelmask.io_SafeHarborCertificate.pdf`
 - Quality audit (for NIfTI)
 
 ---
@@ -320,11 +320,11 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 #### FOI Legal Mode (Crown Solicitor/Litigation)
 - Forensic integrity with SHA-256 hashing
 - Chain of custody documentation
-- `VoxelMask_ForensicCertificate.pdf`
+- `Voxelmask.io_ForensicCertificate.pdf`
 
 #### FOI Patient Mode (Patient Requests)
 - Patient-friendly release format
-- `VoxelMask_PatientRelease.pdf`
+- `Voxelmask.io_PatientRelease.pdf`
 - Bundled DICOM Viewer
 
 #### Staff Tags Redacted
@@ -556,7 +556,7 @@ These text fields are scanned for PHI patterns:
 
 ### De-identification Method Codes (DICOM PS3.15)
 
-VoxelMask sets these compliance tags:
+Voxelmask.io sets these compliance tags:
 
 ```
 (0012,0062) PatientIdentityRemoved = "YES"
@@ -572,7 +572,7 @@ DeidentificationMethodCodeSequence:
 
 ## 🖥️ DICOM Viewer
 
-VoxelMask includes a **bundled HTML5 DICOM Viewer** in every output ZIP.
+Voxelmask.io includes a **bundled HTML5 DICOM Viewer** in every output ZIP.
 
 ### Features
 - **Zero Installation**: Single HTML file, runs in any modern browser
@@ -603,8 +603,8 @@ VoxelMask includes a **bundled HTML5 DICOM Viewer** in every output ZIP.
 │   └── S###_SeriesDescription/
 │       └── IMG_####_filename.dcm
 ├── DICOM_Viewer.html
-├── VoxelMask_Report.pdf
-├── VoxelMask_AuditLog.txt
+├── Voxelmask.io_Report.pdf
+├── Voxelmask.io_AuditLog.txt
 └── README.txt
 ```
 
@@ -619,7 +619,7 @@ VoxelMask includes a **bundled HTML5 DICOM Viewer** in every output ZIP.
 ├── series_001.nii.gz
 ├── series_002.nii.gz
 ├── README_NIfTI.txt
-└── VoxelMask_AuditLog.txt
+└── Voxelmask.io_AuditLog.txt
 ```
 
 *Note: DICOM Viewer NOT included with NIfTI output.*
@@ -712,7 +712,7 @@ fpdf2>=2.7.0
 ## 🏗️ Architecture
 
 ```
-VoxelMask/
+Voxelmask.io/
 ├── src/
 │   ├── app.py                    # Main Streamlit application
 │   ├── foi_engine.py             # FOI processing (Legal/Patient)
@@ -787,11 +787,11 @@ python -m research_mode.cli input_dir/ -o output_dir/ --report report.json
 
 | Profile | Report | Filename |
 |---------|--------|----------|
-| Internal Repair | Data Repair Log | `VoxelMask_DataRepairLog.pdf` |
-| US Research | Safe Harbor Certificate | `VoxelMask_SafeHarborCertificate.pdf` |
-| AU Strict | OAIC Privacy Audit | `VoxelMask_OAIC_PrivacyAudit.pdf` |
-| FOI Legal | Forensic Integrity Certificate | `VoxelMask_ForensicCertificate.pdf` |
-| FOI Patient | Medical Image Release Letter | `VoxelMask_PatientRelease.pdf` |
+| Internal Repair | Data Repair Log | `Voxelmask.io_DataRepairLog.pdf` |
+| US Research | Safe Harbor Certificate | `Voxelmask.io_SafeHarborCertificate.pdf` |
+| AU Strict | OAIC Privacy Audit | `Voxelmask.io_OAIC_PrivacyAudit.pdf` |
+| FOI Legal | Forensic Integrity Certificate | `Voxelmask.io_ForensicCertificate.pdf` |
+| FOI Patient | Medical Image Release Letter | `Voxelmask.io_PatientRelease.pdf` |
 
 ### Security Features
 - SHA-256 hash verification (input/output)
@@ -803,19 +803,23 @@ python -m research_mode.cli input_dir/ -o output_dir/ --report report.json
 
 ## 📈 Version History
 
-### v2.0.0 (2025-12)
+### v0.3.0 (2025-12)
 - **FOI Mode**: Freedom of Information processing for legal/patient requests
-- **Multi-Compliance Engine**: HIPAA, OAIC, and custom profiles
+- **Multi-Compliance Engine V1.0**: HIPAA, OAIC, and custom profiles
 - **NIfTI Export**: AI/ML-ready output with quality audit
 - **PDF Reports**: Professional compliance documentation
 - **Bundled DICOM Viewer**: HTML5 viewer in every output
-
-### v1.0.0 (2025-12-04)
-- **Rebrand**: Adelaide Scrubber → VoxelMask
-- **Modality-Aware Safety Protocol v2.1**
+- **Modality-Aware Safety Protocol V1.0**
 - **Zero-Loss Pipeline**: CT/MRI/NM/XA/DX pixel preservation
 - **HIPAA Safe Harbor compliance**
 - **Docker deployment with dark theme**
+
+#### Recent Updates
+- 2025-12-08 20:00+ - Add beta release notice to documentation
+- 2025-12-08 20:00+ - Update DICOM viewer, app, audit, nifti handler, pdf reporter, and deployment files
+- 2025-12-08 20:00+ - Add ESMI VueMotion to compatible viewers list
+- 2025-12-08 20:00+ - Add Quick Upload section - no pre-processing required
+- 2025-12-08 20:00+ - Initial commit: Voxelmask.io DICOM De-Identification Engine v0.3
 
 ---
 

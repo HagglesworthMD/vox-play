@@ -296,7 +296,7 @@ class DicomComplianceManager:
     def _apply_us_research_safe_harbor(self, ds: pydicom.Dataset) -> pydicom.Dataset:
         """
         US Research (HIPAA Safe Harbor) Mode:
-        Remove 18 HIPAA identifiers, keep Patient Year of Birth.
+        Remove 18 HIPAA identifiers, shift dates, keep Patient Year of Birth.
         
         Args:
             ds: Input dataset
@@ -312,6 +312,48 @@ class DicomComplianceManager:
         # Remove private tags
         ds.remove_private_tags()
         self._log("Removed: Private tags")
+        
+        # Calculate date shift based on PatientID (deterministic per patient)
+        patient_id = str(getattr(ds, 'PatientID', 'UNKNOWN'))
+        self._date_shift_days = self._calculate_date_shift(patient_id)
+        self._log(f"Date shift: {self._date_shift_days} days")
+        
+        # Initialize UID manager for consistent UID handling
+        if not self._uid_manager:
+            self._uid_manager = UIDManager(seed=patient_id)
+        
+        # Shift all date fields BEFORE removing identifiers
+        date_tags = [
+            'StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate',
+            'InstanceCreationDate', 'PerformedProcedureStepStartDate',
+            'AdmissionDate', 'DischargeDate', 'DateOfSecondaryCapture'
+        ]
+        
+        for tag_name in date_tags:
+            if hasattr(ds, tag_name) and getattr(ds, tag_name):
+                original_date = str(getattr(ds, tag_name))
+                shifted_date = self._shift_date(original_date, self._date_shift_days)
+                setattr(ds, tag_name, shifted_date)
+                self._log(f"Shifted: {tag_name}")
+        
+        # Regenerate UIDs for research de-identification
+        if hasattr(ds, 'StudyInstanceUID') and ds.StudyInstanceUID:
+            old_study = str(ds.StudyInstanceUID)
+            ds.StudyInstanceUID = self._uid_manager.get_new_study_uid(old_study)
+            self._log("UID: StudyInstanceUID regenerated")
+        
+        if hasattr(ds, 'SeriesInstanceUID') and ds.SeriesInstanceUID:
+            old_series = str(ds.SeriesInstanceUID)
+            ds.SeriesInstanceUID = self._uid_manager.get_new_series_uid(old_series)
+            self._log("UID: SeriesInstanceUID regenerated")
+        
+        if hasattr(ds, 'SOPInstanceUID') and ds.SOPInstanceUID:
+            old_sop = str(ds.SOPInstanceUID)
+            new_sop = self._uid_manager.get_new_instance_uid(old_sop)
+            ds.SOPInstanceUID = new_sop
+            if hasattr(ds, 'file_meta'):
+                ds.file_meta.MediaStorageSOPInstanceUID = new_sop
+            self._log("UID: SOPInstanceUID regenerated")
         
         # Remove HIPAA Safe Harbor identifiers
         removed_count = 0
@@ -334,7 +376,7 @@ class DicomComplianceManager:
         
         # Set compliance tags
         ds.PatientIdentityRemoved = 'YES'
-        ds.DeidentificationMethod = 'HIPAA_SAFE_HARBOR | VOXELMASK'
+        ds.DeidentificationMethod = 'HIPAA_SAFE_HARBOR | DATE_SHIFT | UID_REGEN | VOXELMASK'
         
         # Add De-identification Method Code Sequence
         deid_code = Dataset()
@@ -344,6 +386,7 @@ class DicomComplianceManager:
         ds.DeidentificationMethodCodeSequence = Sequence([deid_code])
         
         return ds
+
     
     def _apply_au_strict_oaic(self, ds: pydicom.Dataset) -> pydicom.Dataset:
         """

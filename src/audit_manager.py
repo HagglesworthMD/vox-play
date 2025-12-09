@@ -29,7 +29,7 @@ except ImportError:
     PANDAS_AVAILABLE = False
 
 # Application constants
-APP_VERSION = "1.0.0"
+APP_VERSION = "0.3.0"
 MANUFACTURER = "SAMI_Support_Dev"
 DB_FILENAME = "scrub_history.db"
 

@@ -86,7 +86,7 @@ class ComplianceReport:
     # Report metadata
     report_id: str
     generation_timestamp: str
-    generator_version: str = "1.0.0"
+    generator_version: str = "0.3.0"
     
     # Compliance standards (will be set dynamically)
     compliance_standards: List[str] = field(default_factory=list)
@@ -141,7 +141,7 @@ class ComplianceReportGenerator:
     - Compliance standard verification
     """
     
-    VERSION = "1.0.0"
+    VERSION = "0.3.0"
     
     def __init__(self):
         """Initialize the report generator."""

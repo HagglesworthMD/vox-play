@@ -1,5 +1,7 @@
 # Voxelmask.io - Intelligent DICOM De-Identification Engine
 
+![Build Status](https://github.com/HagglesworthMD/VOXELMASK/actions/workflows/test.yml/badge.svg)
+
 <p align="center">
   <img src="src/VOXELMASK.png" alt="Voxelmask.io - Securing Medical Data. One Voxel at a Time." width="600"/>
 </p>
@@ -820,6 +822,39 @@ python -m research_mode.cli input_dir/ -o output_dir/ --report report.json
 - 2025-12-08 20:00+ - Add ESMI VueMotion to compatible viewers list
 - 2025-12-08 20:00+ - Add Quick Upload section - no pre-processing required
 - 2025-12-08 20:00+ - Initial commit: Voxelmask.io DICOM De-Identification Engine v0.3
+
+---
+
+## 🛡️ Validation & Compliance
+
+VoxelMask.io is verified using a comprehensive **Automated Test Suite** (Pytest) that enforces deterministic compliance rules on every code change.
+
+### Testing Methodology
+
+* **Deterministic Data Generation:** Tests use synthetic DICOM fixtures to verify logic without exposing real patient data.
+* **HIPAA Safe Harbor:** Unit tests assert that `PatientName` is removed and `StudyDate` is shifted by a random offset (14-100 days).
+* **FOI Legal Mode:** Tests verify that `PatientName` is PRESERVED while `ReferringPhysicianName` is REDACTED.
+* **NIfTI Conversion:** Automated tests verify DICOM-to-NIfTI conversion produces valid `.nii.gz` output with non-zero file size.
+* **ZIP Handling:** Tests confirm nested folder structures are correctly extracted and all DICOM files detected by magic bytes.
+
+### Forensic Integrity
+
+* SHA-256 hash consistency checks ensure that input/output pixel data remains identical where required.
+* UID regeneration is tracked and logged for audit purposes.
+
+### CI/CD Pipeline
+
+* **GitHub Actions** automatically runs the full test suite (Logic + NIfTI + UI) on every commit to `main`.
+* Test matrix covers Python 3.10, 3.11, and 3.12.
+* Coverage reports uploaded to Codecov.
+
+```bash
+# Run tests locally
+python -m venv .venv
+source .venv/bin/activate
+pip install pytest pytest-cov pydicom numpy dicom2nifti nibabel
+pytest -v
+```
 
 ---
 

@@ -6,7 +6,7 @@ from typing import Optional, Dict
 from datetime import datetime
 
 # Application constants
-APP_VERSION = "1.0.0"
+APP_VERSION = "0.3.0"
 MANUFACTURER = "SAMI_Support_Dev"
 
 def enforce_dicom_compliance(ds: pydicom.Dataset, 

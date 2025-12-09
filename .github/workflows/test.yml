@@ -91,3 +91,75 @@ jobs:
         # Exit-zero treats all errors as warnings
         flake8 src/ --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
       continue-on-error: true
+
+  build-windows-exe:
+    name: Build Windows Executable
+    runs-on: windows-latest
+    needs: test  # Only build if tests pass
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install streamlit
+        pip install pydicom numpy
+        pip install opencv-python-headless
+        pip install Pillow
+        pip install fpdf2>=2.7.0
+        pip install dicom2nifti>=2.4.9
+        pip install nibabel>=5.1.0
+        pip install scipy>=1.10.0
+        pip install streamlit-drawable-canvas==0.9.3
+        # Install remaining requirements (skip PaddleOCR on Windows build for now)
+        pip install -r requirements_no_paddle.txt || true
+    
+    - name: Build Windows executable
+      run: |
+        pyinstaller --onefile `
+          --additional-hooks-dir=./hooks `
+          --add-data "src;src" `
+          --add-data ".streamlit;.streamlit" `
+          --hidden-import=streamlit `
+          --hidden-import=streamlit.runtime.scriptrunner.magic_funcs `
+          --hidden-import=pydicom `
+          --hidden-import=numpy `
+          --hidden-import=PIL `
+          --hidden-import=cv2 `
+          --hidden-import=fpdf2 `
+          --hidden-import=dicom2nifti `
+          --hidden-import=nibabel `
+          --hidden-import=scipy `
+          --collect-all=streamlit `
+          --collect-all=streamlit_drawable_canvas `
+          --clean `
+          --name VoxelMask `
+          src/run_wrapper.py
+      shell: pwsh
+    
+    - name: Verify build
+      run: |
+        if (Test-Path "dist/VoxelMask.exe") {
+          Write-Host "✅ VoxelMask.exe built successfully!"
+          Get-Item "dist/VoxelMask.exe" | Select-Object Name, Length, LastWriteTime
+        } else {
+          Write-Host "❌ Build failed - VoxelMask.exe not found"
+          exit 1
+        }
+      shell: pwsh
+    
+    - name: Upload Windows executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: VoxelMask-Windows-Executable
+        path: dist/VoxelMask.exe
+        retention-days: 30
+        if-no-files-found: error

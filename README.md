@@ -48,9 +48,10 @@ Voxelmask.io is a professional-grade DICOM processing platform designed for heal
 7. [Output Formats](#-output-formats)
 8. [System Requirements & Compatibility](#-system-requirements--compatibility)
 9. [Installation](#-installation)
-10. [Architecture](#-architecture)
-11. [API Reference](#-api-reference)
-12. [Security & Audit](#-security--audit)
+10. [Desktop App (Windows)](#️-desktop-app-windows)
+11. [Architecture](#-architecture)
+12. [API Reference](#-api-reference)
+13. [Security & Audit](#-security--audit)
 
 ---
 
@@ -708,6 +709,51 @@ nibabel>=5.1.0
 scipy>=1.10.0
 fpdf2>=2.7.0
 ```
+
+### ⬇️ Desktop App (Windows)
+
+For individual users (doctors, researchers, legal teams) who cannot use Docker, a standalone Windows executable is available.
+
+#### Download
+
+1. **From GitHub Actions (Latest Build):**
+   - Go to the [Actions tab](https://github.com/HagglesworthMD/VOXELMASK/actions) on GitHub
+   - Click on the latest successful "VoxelMask Test Suite" workflow run
+   - Scroll down to **Artifacts**
+   - Download `VoxelMask-Windows-Executable`
+   - Extract and run `VoxelMask.exe`
+
+2. **From Releases (Stable Versions):**
+   - Go to the [Releases page](https://github.com/HagglesworthMD/VOXELMASK/releases)
+   - Download the latest `VoxelMask.exe` from the Assets section
+
+#### Usage
+
+```bash
+# Simply double-click VoxelMask.exe or run from command line:
+VoxelMask.exe
+```
+
+The application will:
+- Start a local Streamlit server
+- Automatically open your default browser to `http://localhost:8501`
+- Run entirely offline with no external dependencies
+
+#### System Requirements
+
+| Requirement | Minimum |
+|-------------|---------|
+| OS | Windows 10 (64-bit) or later |
+| RAM | 4 GB (8 GB recommended) |
+| Disk Space | 500 MB |
+| Browser | Chrome, Firefox, Edge (modern versions) |
+
+#### Limitations
+
+- **No PaddleOCR**: The Windows executable does not include PaddleOCR (automatic burned-in PHI detection). Manual pixel masking via click-and-drag is fully supported.
+- **dcm2niix**: For NIfTI export, you may need to install [dcm2niix](https://github.com/rordenlab/dcm2niix/releases) separately and ensure it's in your PATH.
+
+> **⚠️ Note:** The Windows executable is built automatically on every commit. For production use, we recommend using stable releases when available.
 
 ---
 

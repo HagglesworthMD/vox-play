@@ -658,12 +658,100 @@
             e.preventDefault();
             dropZone.classList.remove('bg-gray-900/50');
         });
-        dropZone.addEventListener('drop', (e) => {
+        dropZone.addEventListener('drop', async (e) => {
             e.preventDefault();
             dropZone.classList.remove('bg-gray-900/50');
             logToScreen("Files dropped on DropZone");
-            handleFileSelection(e.dataTransfer.files);
+            
+            // Check if we have DataTransferItemList (needed for folder support)
+            if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+                const allFiles = await getAllFilesFromDataTransfer(e.dataTransfer.items);
+                if (allFiles.length > 0) {
+                    logToScreen(`Extracted ${allFiles.length} files from drop (including folder contents)`);
+                    handleFileSelection(allFiles);
+                } else {
+                    logToScreen("No files found in dropped items", "warn");
+                }
+            } else {
+                // Fallback to regular file list
+                handleFileSelection(e.dataTransfer.files);
+            }
         });
+
+        /**
+         * Recursively extract all files from DataTransferItemList
+         * Supports both individual files and folders
+         */
+        async function getAllFilesFromDataTransfer(items) {
+            const allFiles = [];
+            const entries = [];
+            
+            // Convert items to entries
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.webkitGetAsEntry) {
+                    const entry = item.webkitGetAsEntry();
+                    if (entry) {
+                        entries.push(entry);
+                    }
+                } else if (item.kind === 'file') {
+                    // Fallback for browsers without webkitGetAsEntry
+                    const file = item.getAsFile();
+                    if (file) allFiles.push(file);
+                }
+            }
+            
+            // Process entries (files and directories)
+            for (const entry of entries) {
+                const files = await readEntryRecursively(entry);
+                allFiles.push(...files);
+            }
+            
+            return allFiles;
+        }
+
+        /**
+         * Recursively read a FileSystemEntry (file or directory)
+         */
+        async function readEntryRecursively(entry) {
+            const files = [];
+            
+            if (entry.isFile) {
+                // It's a file - get the File object
+                const file = await new Promise((resolve, reject) => {
+                    entry.file(resolve, reject);
+                });
+                // Attach full path for debugging
+                file.relativePath = entry.fullPath;
+                files.push(file);
+            } else if (entry.isDirectory) {
+                // It's a directory - read all entries
+                logToScreen(`Reading directory: ${entry.name}`);
+                const dirReader = entry.createReader();
+                
+                // readEntries may not return all entries at once, need to call until empty
+                let allEntries = [];
+                const readBatch = () => new Promise((resolve, reject) => {
+                    dirReader.readEntries(resolve, reject);
+                });
+                
+                let batch;
+                do {
+                    batch = await readBatch();
+                    allEntries = allEntries.concat(Array.from(batch));
+                } while (batch.length > 0);
+                
+                logToScreen(`Found ${allEntries.length} items in ${entry.name}`);
+                
+                // Recursively process each entry
+                for (const childEntry of allEntries) {
+                    const childFiles = await readEntryRecursively(childEntry);
+                    files.push(...childFiles);
+                }
+            }
+            
+            return files;
+        }
 
         async function handleFileSelection(fileList) {
             if (!fileList || fileList.length === 0) {

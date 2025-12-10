@@ -603,6 +603,23 @@ st.markdown("""
         border-color: var(--border-default) !important;
     }
 
+    /* Hide 'Press Enter to apply' hint on text inputs */
+    .stTextInput [data-baseweb="input-container"] + div,
+    .stTextArea [data-baseweb="textarea-container"] + div,
+    .stTextInput > div > div:last-child:not([data-baseweb]),
+    div[data-testid="InputInstructions"],
+    .stTextInput small,
+    .stTextArea small {
+        display: none !important;
+        visibility: hidden !important;
+    }
+
+    /* Also hide form helper text */
+    .stTextInput [data-testid="stHelperText"],
+    .stTextArea [data-testid="stHelperText"] {
+        /* Keep help text visible, only hide enter-to-apply */
+    }
+
     /* ═══════════════════════════════════════════════════════════════════════════
        FILE UPLOADER
     ═══════════════════════════════════════════════════════════════════════════ */

@@ -97,6 +97,38 @@
         .hidden-input {
             display: none;
         }
+
+        /* Tool button active state */
+        .tool-btn {
+            color: #9ca3af;
+            transition: all 0.15s ease;
+        }
+
+        .tool-btn:hover {
+            color: #e5e7eb;
+        }
+
+        .tool-btn.active {
+            color: #38bdf8;
+            background-color: rgba(56, 189, 248, 0.15);
+        }
+
+        /* Cursor styles for different tools */
+        .cursor-pan {
+            cursor: grab !important;
+        }
+
+        .cursor-pan:active {
+            cursor: grabbing !important;
+        }
+
+        .cursor-zoom {
+            cursor: zoom-in !important;
+        }
+
+        .cursor-wwwc {
+            cursor: crosshair !important;
+        }
     </style>
 
     <!-- External Libraries (Reverted to Unpkg for Reliability) -->
@@ -305,6 +337,75 @@
                                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
                     </button>
+
+                    <!-- Divider -->
+                    <div class="w-px h-6 bg-gray-700"></div>
+
+                    <!-- INTERACTIVE TOOLS TOOLBAR -->
+                    <div class="flex items-center space-x-1 bg-gray-800 rounded-lg p-1">
+                        <span class="text-xs text-gray-500 px-2">Tools:</span>
+
+                        <!-- W/L Tool (Left Click Drag) -->
+                        <button id="tool-wwwc" onclick="setActiveTool('Wwwc')"
+                            class="tool-btn active p-2 rounded hover:bg-gray-700 transition-colors"
+                            title="Window/Level (Left-click drag)">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="9" stroke-width="2" />
+                                <path stroke-width="2" d="M12 3v18M3 12h18" />
+                            </svg>
+                        </button>
+
+                        <!-- Pan Tool (Right-click or Middle-click drag) -->
+                        <button id="tool-pan" onclick="setActiveTool('Pan')"
+                            class="tool-btn p-2 rounded hover:bg-gray-700 transition-colors"
+                            title="Pan (Right-click drag or hold P + drag)">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M7 11l5-5m0 0l5 5m-5-5v12" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M17 13l-5 5m0 0l-5-5" />
+                            </svg>
+                        </button>
+
+                        <!-- Zoom Tool -->
+                        <button id="tool-zoom" onclick="setActiveTool('Zoom')"
+                            class="tool-btn p-2 rounded hover:bg-gray-700 transition-colors"
+                            title="Zoom (Scroll wheel or Z + drag)">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7" />
+                            </svg>
+                        </button>
+
+                        <!-- Divider -->
+                        <div class="w-px h-5 bg-gray-600 mx-1"></div>
+
+                        <!-- Zoom In Button -->
+                        <button onclick="zoomIn()" class="p-2 rounded hover:bg-gray-700 transition-colors"
+                            title="Zoom In (+)">
+                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 4v16m8-8H4" />
+                            </svg>
+                        </button>
+
+                        <!-- Zoom Out Button -->
+                        <button onclick="zoomOut()" class="p-2 rounded hover:bg-gray-700 transition-colors"
+                            title="Zoom Out (-)">
+                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
+                            </svg>
+                        </button>
+
+                        <!-- Reset View -->
+                        <button onclick="resetView()" class="p-2 rounded hover:bg-gray-700 transition-colors"
+                            title="Reset View (R)">
+                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                        </button>
+                    </div>
 
                     <!-- Divider -->
                     <div class="w-px h-6 bg-gray-700"></div>
@@ -662,7 +763,7 @@
             e.preventDefault();
             dropZone.classList.remove('bg-gray-900/50');
             logToScreen("Files dropped on DropZone");
-            
+
             // Check if we have DataTransferItemList (needed for folder support)
             if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
                 const allFiles = await getAllFilesFromDataTransfer(e.dataTransfer.items);
@@ -685,7 +786,7 @@
         async function getAllFilesFromDataTransfer(items) {
             const allFiles = [];
             const entries = [];
-            
+
             // Convert items to entries
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
@@ -700,13 +801,13 @@
                     if (file) allFiles.push(file);
                 }
             }
-            
+
             // Process entries (files and directories)
             for (const entry of entries) {
                 const files = await readEntryRecursively(entry);
                 allFiles.push(...files);
             }
-            
+
             return allFiles;
         }
 
@@ -715,7 +816,7 @@
          */
         async function readEntryRecursively(entry) {
             const files = [];
-            
+
             if (entry.isFile) {
                 // It's a file - get the File object
                 const file = await new Promise((resolve, reject) => {
@@ -728,28 +829,28 @@
                 // It's a directory - read all entries
                 logToScreen(`Reading directory: ${entry.name}`);
                 const dirReader = entry.createReader();
-                
+
                 // readEntries may not return all entries at once, need to call until empty
                 let allEntries = [];
                 const readBatch = () => new Promise((resolve, reject) => {
                     dirReader.readEntries(resolve, reject);
                 });
-                
+
                 let batch;
                 do {
                     batch = await readBatch();
                     allEntries = allEntries.concat(Array.from(batch));
                 } while (batch.length > 0);
-                
+
                 logToScreen(`Found ${allEntries.length} items in ${entry.name}`);
-                
+
                 // Recursively process each entry
                 for (const childEntry of allEntries) {
                     const childFiles = await readEntryRecursively(childEntry);
                     files.push(...childFiles);
                 }
             }
-            
+
             return files;
         }
 
@@ -1581,84 +1682,222 @@
             logToScreen("Fit to window");
         }
 
-        // --- CLICK & DRAG WINDOW/LEVEL (Brightness/Contrast) ---
+        // --- INTERACTIVE TOOLS SYSTEM ---
 
-        const wlDrag = {
+        let currentTool = 'Wwwc'; // Default tool
+
+        function setActiveTool(toolName) {
+            currentTool = toolName;
+
+            // Update UI - deactivate all, activate selected
+            document.querySelectorAll('.tool-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            const activeBtn = document.getElementById('tool-' + toolName.toLowerCase());
+            if (activeBtn) activeBtn.classList.add('active');
+
+            // Update cursor on viewport
+            const viewport = document.getElementById('dicom-image');
+            viewport.classList.remove('cursor-pan', 'cursor-zoom', 'cursor-wwwc');
+            if (toolName === 'Pan') viewport.classList.add('cursor-pan');
+            else if (toolName === 'Zoom') viewport.classList.add('cursor-zoom');
+            else viewport.classList.add('cursor-wwwc');
+
+            // If cornerstoneTools is available, set tool active
+            if (window.cornerstoneToolsLoaded && typeof cornerstoneTools !== 'undefined') {
+                try {
+                    // Deactivate all tools from left button, reactivate selected
+                    cornerstoneTools.setToolPassive('Wwwc');
+                    cornerstoneTools.setToolPassive('Pan');
+                    cornerstoneTools.setToolPassive('Zoom');
+                    cornerstoneTools.setToolActive(toolName, { mouseButtonMask: 1 });
+                    logToScreen(`Tool switched to: ${toolName}`, 'success');
+                } catch (e) {
+                    logToScreen(`Tool switch error: ${e.message}`, 'warn');
+                }
+            } else {
+                logToScreen(`Tool mode: ${toolName} (fallback - drag controls)`);
+            }
+        }
+
+        function zoomIn() {
+            try {
+                const viewport = cornerstone.getViewport(element);
+                viewport.scale *= 1.25;
+                cornerstone.setViewport(element, viewport);
+                logToScreen(`Zoom in: ${(viewport.scale * 100).toFixed(0)}%`);
+            } catch (e) {
+                logToScreen("Zoom in failed: " + e.message, 'warn');
+            }
+        }
+
+        function zoomOut() {
+            try {
+                const viewport = cornerstone.getViewport(element);
+                viewport.scale *= 0.8;
+                cornerstone.setViewport(element, viewport);
+                logToScreen(`Zoom out: ${(viewport.scale * 100).toFixed(0)}%`);
+            } catch (e) {
+                logToScreen("Zoom out failed: " + e.message, 'warn');
+            }
+        }
+
+        function resetView() {
+            try {
+                cornerstone.reset(element);
+                updateWLDisplay();
+                logToScreen("View reset to defaults", 'success');
+            } catch (e) {
+                logToScreen("Reset failed: " + e.message, 'warn');
+            }
+        }
+
+        // Mouse wheel zoom (works universally)
+        element.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            try {
+                const viewport = cornerstone.getViewport(element);
+                if (e.deltaY < 0) {
+                    viewport.scale *= 1.1; // Zoom in
+                } else {
+                    viewport.scale *= 0.9; // Zoom out
+                }
+                cornerstone.setViewport(element, viewport);
+            } catch (err) {
+                // Viewport not ready
+            }
+        }, { passive: false });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Don't process if typing in an input
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            switch (e.key.toLowerCase()) {
+                case 'w':
+                    setActiveTool('Wwwc');
+                    break;
+                case 'p':
+                    setActiveTool('Pan');
+                    break;
+                case 'z':
+                    setActiveTool('Zoom');
+                    break;
+                case 'f':
+                    fitToWindow();
+                    break;
+                case 'r':
+                    resetView();
+                    break;
+                case '+':
+                case '=':
+                    zoomIn();
+                    break;
+                case '-':
+                    zoomOut();
+                    break;
+            }
+        });
+
+        // --- CLICK & DRAG HANDLERS (Tool-Aware) ---
+
+        const dragState = {
             active: false,
             startX: 0,
             startY: 0,
             startWW: 0,
-            startWC: 0
+            startWC: 0,
+            startTranslateX: 0,
+            startTranslateY: 0,
+            startScale: 1
         };
 
-        // Mouse events for W/L adjustment
+        // Mouse events for tool-based interaction
         element.addEventListener('mousedown', (e) => {
-            // Only left button
+            // Left button only for primary tool
             if (e.button !== 0) return;
-            startWLDrag(e.clientX, e.clientY);
+            startDrag(e.clientX, e.clientY);
             e.preventDefault();
         });
 
         document.addEventListener('mousemove', (e) => {
-            if (!wlDrag.active) return;
-            handleWLDrag(e.clientX, e.clientY);
+            if (!dragState.active) return;
+            handleDrag(e.clientX, e.clientY);
         });
 
         document.addEventListener('mouseup', () => {
-            wlDrag.active = false;
+            dragState.active = false;
         });
 
-        // Touch events for mobile W/L adjustment
+        // Touch events for mobile
         element.addEventListener('touchstart', (e) => {
             if (e.touches.length === 1) {
-                startWLDrag(e.touches[0].clientX, e.touches[0].clientY);
+                startDrag(e.touches[0].clientX, e.touches[0].clientY);
                 e.preventDefault();
             }
         }, { passive: false });
 
         element.addEventListener('touchmove', (e) => {
-            if (!wlDrag.active || e.touches.length !== 1) return;
-            handleWLDrag(e.touches[0].clientX, e.touches[0].clientY);
+            if (!dragState.active || e.touches.length !== 1) return;
+            handleDrag(e.touches[0].clientX, e.touches[0].clientY);
             e.preventDefault();
         }, { passive: false });
 
         element.addEventListener('touchend', () => {
-            wlDrag.active = false;
+            dragState.active = false;
         });
 
-        function startWLDrag(x, y) {
+        function startDrag(x, y) {
             try {
                 const vp = cornerstone.getViewport(element);
-                if (!vp || !vp.voi) return;
+                if (!vp) return;
 
-                wlDrag.active = true;
-                wlDrag.startX = x;
-                wlDrag.startY = y;
-                wlDrag.startWW = vp.voi.windowWidth;
-                wlDrag.startWC = vp.voi.windowCenter;
+                dragState.active = true;
+                dragState.startX = x;
+                dragState.startY = y;
+
+                // Store initial values based on tool
+                if (vp.voi) {
+                    dragState.startWW = vp.voi.windowWidth;
+                    dragState.startWC = vp.voi.windowCenter;
+                }
+                dragState.startTranslateX = vp.translation ? vp.translation.x : 0;
+                dragState.startTranslateY = vp.translation ? vp.translation.y : 0;
+                dragState.startScale = vp.scale || 1;
             } catch (e) {
                 // Viewport not ready
             }
         }
 
-        function handleWLDrag(x, y) {
+        function handleDrag(x, y) {
             try {
                 const vp = cornerstone.getViewport(element);
-                if (!vp || !vp.voi) return;
+                if (!vp) return;
 
-                const deltaX = x - wlDrag.startX;
-                const deltaY = y - wlDrag.startY;
+                const deltaX = x - dragState.startX;
+                const deltaY = y - dragState.startY;
 
-                // Sensitivity: adjust these multipliers for responsiveness
-                const sensitivity = Math.max(1, wlDrag.startWW / 100);
-
-                // Horizontal = Window Width (contrast)
-                // Vertical = Window Center (brightness)
-                vp.voi.windowWidth = Math.max(1, wlDrag.startWW + (deltaX * sensitivity));
-                vp.voi.windowCenter = wlDrag.startWC - (deltaY * sensitivity);
+                if (currentTool === 'Wwwc') {
+                    // Window/Level: Horizontal = Width, Vertical = Center
+                    if (!vp.voi) return;
+                    const sensitivity = Math.max(1, dragState.startWW / 100);
+                    vp.voi.windowWidth = Math.max(1, dragState.startWW + (deltaX * sensitivity));
+                    vp.voi.windowCenter = dragState.startWC - (deltaY * sensitivity);
+                    updateWLDisplay();
+                }
+                else if (currentTool === 'Pan') {
+                    // Pan: Move image
+                    if (!vp.translation) vp.translation = { x: 0, y: 0 };
+                    vp.translation.x = dragState.startTranslateX + deltaX;
+                    vp.translation.y = dragState.startTranslateY + deltaY;
+                }
+                else if (currentTool === 'Zoom') {
+                    // Zoom: Vertical drag = scale
+                    const zoomFactor = 1 + (deltaY * -0.005); // Negative because drag up = zoom in
+                    vp.scale = Math.max(0.1, Math.min(10, dragState.startScale * zoomFactor));
+                }
 
                 cornerstone.setViewport(element, vp);
-                updateWLDisplay();
             } catch (e) {
                 // Viewport not available
             }

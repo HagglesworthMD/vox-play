@@ -499,6 +499,49 @@ st.markdown("""
         background-color: var(--bg-tertiary) !important;
     }
 
+    /* Selectbox dropdown list - comprehensive fix for white background */
+    [data-baseweb="popover"],
+    [data-baseweb="popover"] [data-baseweb="menu"],
+    [data-baseweb="select"] [data-baseweb="popover"],
+    [data-baseweb="list"],
+    ul[role="listbox"],
+    div[role="listbox"] {
+        background-color: var(--bg-secondary) !important;
+        border: 1px solid var(--border-default) !important;
+    }
+
+    /* Individual options in dropdown */
+    [data-baseweb="menu"] [role="option"],
+    ul[role="listbox"] li,
+    div[role="listbox"] [role="option"],
+    [data-baseweb="list"] li,
+    [data-baseweb="menu-item"] {
+        background-color: var(--bg-secondary) !important;
+        color: var(--text-primary) !important;
+    }
+
+    [data-baseweb="menu"] [role="option"]:hover,
+    ul[role="listbox"] li:hover,
+    div[role="listbox"] [role="option"]:hover,
+    [data-baseweb="list"] li:hover,
+    [data-baseweb="menu-item"]:hover {
+        background-color: var(--bg-tertiary) !important;
+    }
+
+    /* Selected option highlight */
+    [data-baseweb="menu"] [aria-selected="true"],
+    ul[role="listbox"] [aria-selected="true"],
+    [data-baseweb="list"] [aria-selected="true"] {
+        background-color: var(--bg-tertiary) !important;
+        color: var(--accent-blue) !important;
+    }
+
+    /* Ensure the popover body has dark background */
+    [data-baseweb="popover"] > div > div,
+    [data-baseweb="popover"] > div > div > div {
+        background-color: var(--bg-secondary) !important;
+    }
+
     /* Sliders - larger thumb for easier clicking */
     .stSlider > div > div > div > div {
         background-color: var(--border-default) !important;

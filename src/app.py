@@ -1469,6 +1469,89 @@ os.makedirs("studies", exist_ok=True)
 if st.session_state.get('processing_complete') and st.session_state.get('output_zip_buffer'):
     st.success(f"✅ Processing complete! {len(st.session_state.processed_files)} files processed successfully")
     
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PROCESSING DIAGNOSTICS PANEL
+    # ═══════════════════════════════════════════════════════════════════════════════
+    if st.session_state.get('processing_stats'):
+        stats = st.session_state.processing_stats
+        
+        # Format values for display
+        duration = stats.get('duration_seconds', 0)
+        if duration < 60:
+            duration_str = f"{duration:.1f}s"
+        else:
+            mins = int(duration // 60)
+            secs = duration % 60
+            duration_str = f"{mins}m {secs:.1f}s"
+        
+        input_mb = stats.get('input_bytes', 0) / (1024 * 1024)
+        output_mb = stats.get('output_bytes', 0) / (1024 * 1024)
+        files_per_sec = stats.get('files_per_second', 0)
+        mb_per_sec = stats.get('mb_per_second', 0)
+        
+        # Get profile display name
+        profile_names = {
+            "internal_repair": "🔧 Clinical Correction",
+            "us_research_safe_harbor": "🇺🇸 Safe Harbor",
+            "au_strict_oaic": "🇦🇺 AU Strict",
+            "foi_legal": "⚖️ FOI/Legal",
+            "foi_patient": "📋 FOI/Patient"
+        }
+        profile_display = profile_names.get(stats.get('profile', ''), stats.get('profile', 'Unknown'))
+        
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, rgba(51, 145, 255, 0.08) 0%, rgba(35, 134, 54, 0.05) 100%); 
+                    border: 1px solid rgba(51, 145, 255, 0.2); 
+                    border-radius: 12px; 
+                    padding: 20px; 
+                    margin: 16px 0;">
+            <div style="display: flex; align-items: center; margin-bottom: 16px;">
+                <span style="font-size: 20px; margin-right: 10px;">📊</span>
+                <span style="font-weight: 600; color: #e6edf3; font-size: 15px;">Processing Diagnostics</span>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px;">
+                <!-- Duration -->
+                <div style="background: rgba(51, 145, 255, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
+                    <div style="font-size: 22px; font-weight: 700; color: #3391ff;">{duration_str}</div>
+                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">Duration</div>
+                </div>
+                
+                <!-- Files Processed -->
+                <div style="background: rgba(35, 134, 54, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
+                    <div style="font-size: 22px; font-weight: 700; color: #238636;">{stats.get('file_count', 0)}</div>
+                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">Files</div>
+                </div>
+                
+                <!-- Speed -->
+                <div style="background: rgba(210, 153, 34, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
+                    <div style="font-size: 22px; font-weight: 700; color: #d29922;">{files_per_sec:.1f}</div>
+                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">Files/sec</div>
+                </div>
+                
+                <!-- Throughput -->
+                <div style="background: rgba(139, 148, 158, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
+                    <div style="font-size: 22px; font-weight: 700; color: #8b949e;">{mb_per_sec:.1f}</div>
+                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">MB/sec</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(48, 54, 61, 0.5);">
+                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                    <span style="font-size: 12px; color: #6e7681;">
+                        📥 Input: <span style="color: #8b949e;">{input_mb:.2f} MB</span>
+                    </span>
+                    <span style="font-size: 12px; color: #6e7681;">
+                        🏷️ Profile: <span style="color: #8b949e;">{profile_display}</span>
+                    </span>
+                    <span style="font-size: 12px; color: #6e7681;">
+                        🕐 {stats.get('timestamp', '')[:19].replace('T', ' ')}
+                    </span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     num_files = len(st.session_state.processed_files)
     zip_data = st.session_state.output_zip_buffer
     
@@ -1583,7 +1666,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     with col2:
         if st.button("🔄 Start New Job", use_container_width=True, type="secondary", key="start_new_job"):
             # Clear all session state related to processing
-            for key in ['processing_complete', 'output_zip_buffer', 'processed_files', 'combined_audit_logs']:
+            for key in ['processing_complete', 'output_zip_buffer', 'processed_files', 'combined_audit_logs', 'processing_stats']:
                 if key in st.session_state:
                     del st.session_state[key]
             # Clear mask-related session state
@@ -1859,21 +1942,9 @@ if st.session_state.get('uploaded_dicom_files'):
     # Create manifest DataFrame
     manifest_df = pd.DataFrame(manifest_data)
     
-    # Show manifest summary
-    total_files = len(manifest_df)
-    image_files = len(manifest_df[manifest_df['Type'] == 'Image'])
-    document_files = total_files - image_files
-    
     st.markdown("### 📋 File Analysis Complete")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Files", total_files)
-    with col2:
-        st.metric("Images Ready", image_files)
-    with col3:
-        st.metric("Documents/DICOMDIR Omitted", document_files)
     
-    # Interactive manifest editor
+    # Interactive manifest editor FIRST (so user can toggle checkboxes)
     st.markdown("**Select files to process:**")
     st.caption("⚠️ DICOMDIR files are automatically excluded. Toggle checkboxes to include/exclude files.")
     
@@ -1911,6 +1982,19 @@ if st.session_state.get('uploaded_dicom_files'):
     for idx in range(len(edited_manifest)):
         file_id = manifest_df.iloc[idx]['FileID']
         st.session_state.manifest_selections[file_id] = edited_manifest.iloc[idx]['Include']
+    
+    # Show LIVE summary based on edited_manifest (AFTER user edits)
+    total_files = len(edited_manifest)
+    included_files = len(edited_manifest[edited_manifest['Include'] == True])
+    excluded_files = len(edited_manifest[edited_manifest['Include'] == False])
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Files", total_files)
+    with col2:
+        st.metric("Selected", included_files, help="Files checked for processing")
+    with col3:
+        st.metric("Excluded", excluded_files, help="Files unchecked or auto-excluded")
     
     # Get selected file indices for processing (use indices to avoid filename collision)
     selected_indices = []
@@ -2325,22 +2409,38 @@ if st.session_state.get('uploaded_dicom_files'):
                 # Show: Patient Name, Sex, DOB, Study Details
                 # ═══════════════════════════════════════════════════════════════
                 if pacs_operation_mode == "internal_repair":
-                    # Patient Demographics - Primary Layout
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        new_patient_name = st.text_input(
-                            "**Patient Name**",
-                            placeholder="e.g., CAREY NICOLE AMY",
-                            help="Format: SURNAME FIRSTNAME MIDDLENAME - this will replace the original")
-                    with col2:
-                        patient_sex = st.selectbox("**Sex**", options=["", "F", "M", "O"], index=0)
+                    # UID-Only Mode Toggle - Prominent at top
+                    uid_only_mode = st.checkbox(
+                        "🔁 **UID Regeneration Only** (Keep all patient data, fix PACS duplicates)",
+                        value=False,
+                        help="Enable this to regenerate SOP Instance UIDs without modifying any patient information. Use when re-importing studies that have duplicate UID errors."
+                    )
                     
-                    # Secondary row
-                    col1, col2 = st.columns([1, 1])
-                    with col1:
-                        patient_dob = st.date_input("**Date of Birth**", value=None, min_value=date(1900, 1, 1))
-                    with col2:
-                        regenerate_uids = st.checkbox("🔄 Regenerate UIDs", value=False, help="Fix duplicate UID errors")
+                    if uid_only_mode:
+                        st.info("ℹ️ **UID-Only Mode**: Patient name, DOB, and all other data will be **preserved**. Only SOP/Series/Study Instance UIDs will be regenerated to prevent PACS conflicts.")
+                        # Auto-enable UID regeneration
+                        regenerate_uids = True
+                        # Skip patient name requirement
+                        new_patient_name = "PRESERVED"
+                        patient_sex = ""
+                        patient_dob = None
+                    else:
+                        # Normal Clinical Correction mode - Patient Demographics
+                        col1, col2 = st.columns([2, 1])
+                        with col1:
+                            new_patient_name = st.text_input(
+                                "**Patient Name**",
+                                placeholder="e.g., CAREY NICOLE AMY",
+                                help="Format: SURNAME FIRSTNAME MIDDLENAME - this will replace the original")
+                        with col2:
+                            patient_sex = st.selectbox("**Sex**", options=["", "F", "M", "O"], index=0)
+                        
+                        # Secondary row
+                        col1, col2 = st.columns([1, 1])
+                        with col1:
+                            patient_dob = st.date_input("**Date of Birth**", value=None, min_value=date(1900, 1, 1))
+                        with col2:
+                            regenerate_uids = st.checkbox("🔄 Regenerate UIDs", value=False, help="Fix duplicate UID errors")
                     
                     # Expandable sections for additional details
                     col1, col2 = st.columns(2)
@@ -2510,8 +2610,8 @@ if st.session_state.get('uploaded_dicom_files'):
             # Validation happens AFTER form submission
             can_process = True
             
-            # Only require patient name for Clinical Correction
-            if pacs_operation_mode == "internal_repair" and not new_patient_name.strip():
+            # Only require patient name for Clinical Correction (unless UID-only mode)
+            if pacs_operation_mode == "internal_repair" and not uid_only_mode and not new_patient_name.strip():
                 if process_btn:
                     st.warning("⚠️ Please enter a patient name before processing")
                 can_process = False
@@ -2543,7 +2643,8 @@ if st.session_state.get('uploaded_dicom_files'):
                         "reason_for_correction": reason_for_correction,
                         "correction_notes": correction_notes.strip() if correction_notes else "",
                         "operator_name": operator_name.strip() if operator_name else "",
-                        "auto_timestamp": auto_timestamp
+                        "auto_timestamp": auto_timestamp,
+                        "uid_only_mode": uid_only_mode  # If True, preserve patient data but regenerate UIDs
                     }
                     research_context = None
                 elif pacs_operation_mode.startswith("foi_"):
@@ -2577,6 +2678,14 @@ if st.session_state.get('uploaded_dicom_files'):
                 
                 processed_files = []
                 combined_audit_logs = []
+                
+                # ═══════════════════════════════════════════════════════════════
+                # DIAGNOSTIC TRACKING - Start timer and byte counter
+                # ═══════════════════════════════════════════════════════════════
+                import time
+                processing_start_time = time.time()
+                total_input_bytes = sum(f.size for f in all_files)
+                total_output_bytes = 0
                 
                 # Progress bar for multi-file processing
                 progress_bar = st.progress(0)
@@ -2906,6 +3015,28 @@ if st.session_state.get('uploaded_dicom_files'):
                     st.session_state.combined_audit_logs = "\n\n".join(combined_audit_logs)
                     st.session_state.processing_complete = True
                     
+                    # ═══════════════════════════════════════════════════════════════
+                    # DIAGNOSTIC STATS - Calculate processing metrics
+                    # ═══════════════════════════════════════════════════════════════
+                    processing_end_time = time.time()
+                    processing_duration = processing_end_time - processing_start_time
+                    
+                    # Calculate output bytes from processed files
+                    for pf in processed_files:
+                        if 'output_bytes' in pf:
+                            total_output_bytes += pf.get('output_bytes', 0)
+                    
+                    st.session_state.processing_stats = {
+                        'duration_seconds': processing_duration,
+                        'file_count': len(processed_files),
+                        'input_bytes': total_input_bytes,
+                        'output_bytes': total_output_bytes,
+                        'files_per_second': len(processed_files) / processing_duration if processing_duration > 0 else 0,
+                        'mb_per_second': (total_input_bytes / (1024 * 1024)) / processing_duration if processing_duration > 0 else 0,
+                        'profile': pacs_operation_mode,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
                     # Create ZIP file for bulk download WITH FOLDER STRUCTURE
                     import io
                     import re
@@ -2935,7 +3066,13 @@ if st.session_state.get('uploaded_dicom_files'):
                     elif clinical_context:
                         # CLINICAL MODE: Use patient name (this is a clinical correction)
                         patient_name = clinical_context.get('patient_name', '')
-                        if patient_name:
+                        uid_only = clinical_context.get('uid_only_mode', False)
+                        
+                        if uid_only:
+                            # In UID-only mode, get original patient name from first file
+                            original_name = first_file_meta.get('patient_name', '')
+                            root_folder_raw = f"UID_Regen_{original_name}" if original_name else f"UID_Regen_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        elif patient_name and patient_name != "PRESERVED":
                             root_folder_raw = patient_name
                         else:
                             root_folder_raw = f"Clinical_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

@@ -2,7 +2,7 @@
 maxUploadSize = 10240
 maxMessageSize = 10240
 enableCORS = false
-enableXsrfProtection = true
+enableXsrfProtection = false
 
 [theme]
 primaryColor = "#3391ff"

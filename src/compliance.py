@@ -102,15 +102,23 @@ def enforce_dicom_compliance(ds: pydicom.Dataset,
         # Note: AccessionNumber is now handled by apply_deterministic_sanitization
                 
     elif mode.upper() == "CLINICAL" and new_details:
-        # Targeted correction for clinical use
-        if new_details.get('patient_name'):
-            ds.PatientName = new_details['patient_name']
-        if new_details.get('patient_id'): 
-            ds.PatientID = new_details['patient_id']
-        if new_details.get('patient_dob'):
-            ds.PatientBirthDate = new_details['patient_dob']
-        if new_details.get('institution'):
-            ds.InstitutionName = new_details['institution']
+        # Check if we're in UID-only mode (preserve patient data)
+        uid_only_mode = new_details.get('uid_only_mode', False)
+        
+        if uid_only_mode:
+            # UID-Only Mode: Don't modify patient data, just mark as processed
+            # UIDs are regenerated separately by the compliance engine
+            pass  # Patient data is preserved
+        else:
+            # Normal Clinical Correction: Apply patient data changes
+            if new_details.get('patient_name'):
+                ds.PatientName = new_details['patient_name']
+            if new_details.get('patient_id'): 
+                ds.PatientID = new_details['patient_id']
+            if new_details.get('patient_dob'):
+                ds.PatientBirthDate = new_details['patient_dob']
+            if new_details.get('institution'):
+                ds.InstitutionName = new_details['institution']
         # Note: AccessionNumber is now handled by apply_deterministic_sanitization
     
     return ds

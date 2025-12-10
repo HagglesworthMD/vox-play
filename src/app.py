@@ -82,17 +82,17 @@ def analyze_dicom_context(file_path):
             file_type = "Document"
         
         # Determine risk and inclusion
-        # CHANGED: Include documents by default - they need individual masking
+        # Documents are EXCLUDED by default - user can opt-in if needed
         if file_type == "Image":
             risk = "Low"
             include = True
         elif file_type == "Document":
             risk = "Medium"  # Documents may have PHI but we can mask them
-            include = True   # Include by default so they show in preview
+            include = False  # EXCLUDE by default - forms usually not needed
         else:
-            # SR, PDF - higher risk but still include for user review
+            # SR, PDF - higher risk, exclude by default
             risk = "High"
-            include = True   # Include by default - user can uncheck if needed
+            include = False  # Exclude by default - user can opt-in if needed
             
         return {
             'Type': file_type,
@@ -1499,58 +1499,20 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         }
         profile_display = profile_names.get(stats.get('profile', ''), stats.get('profile', 'Unknown'))
         
-        st.markdown(f"""
-        <div style="background: linear-gradient(135deg, rgba(51, 145, 255, 0.08) 0%, rgba(35, 134, 54, 0.05) 100%); 
-                    border: 1px solid rgba(51, 145, 255, 0.2); 
-                    border-radius: 12px; 
-                    padding: 20px; 
-                    margin: 16px 0;">
-            <div style="display: flex; align-items: center; margin-bottom: 16px;">
-                <span style="font-size: 20px; margin-right: 10px;">📊</span>
-                <span style="font-weight: 600; color: #e6edf3; font-size: 15px;">Processing Diagnostics</span>
-            </div>
-            
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px;">
-                <!-- Duration -->
-                <div style="background: rgba(51, 145, 255, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
-                    <div style="font-size: 22px; font-weight: 700; color: #3391ff;">{duration_str}</div>
-                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">Duration</div>
-                </div>
-                
-                <!-- Files Processed -->
-                <div style="background: rgba(35, 134, 54, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
-                    <div style="font-size: 22px; font-weight: 700; color: #238636;">{stats.get('file_count', 0)}</div>
-                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">Files</div>
-                </div>
-                
-                <!-- Speed -->
-                <div style="background: rgba(210, 153, 34, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
-                    <div style="font-size: 22px; font-weight: 700; color: #d29922;">{files_per_sec:.1f}</div>
-                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">Files/sec</div>
-                </div>
-                
-                <!-- Throughput -->
-                <div style="background: rgba(139, 148, 158, 0.1); border-radius: 8px; padding: 12px; text-align: center;">
-                    <div style="font-size: 22px; font-weight: 700; color: #8b949e;">{mb_per_sec:.1f}</div>
-                    <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px;">MB/sec</div>
-                </div>
-            </div>
-            
-            <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(48, 54, 61, 0.5);">
-                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-                    <span style="font-size: 12px; color: #6e7681;">
-                        📥 Input: <span style="color: #8b949e;">{input_mb:.2f} MB</span>
-                    </span>
-                    <span style="font-size: 12px; color: #6e7681;">
-                        🏷️ Profile: <span style="color: #8b949e;">{profile_display}</span>
-                    </span>
-                    <span style="font-size: 12px; color: #6e7681;">
-                        🕐 {stats.get('timestamp', '')[:19].replace('T', ' ')}
-                    </span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Use native Streamlit components for reliability
+        st.markdown("### 📊 Processing Diagnostics")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("⏱️ Duration", duration_str)
+        with col2:
+            st.metric("📁 Files", stats.get('file_count', 0))
+        with col3:
+            st.metric("⚡ Speed", f"{files_per_sec:.1f}/sec")
+        with col4:
+            st.metric("💾 Throughput", f"{mb_per_sec:.1f} MB/s")
+        
+        st.caption(f"📥 Input: {input_mb:.2f} MB  |  🏷️ Profile: {profile_display}  |  🕐 {stats.get('timestamp', '')[:19].replace('T', ' ')}")
     
     num_files = len(st.session_state.processed_files)
     zip_data = st.session_state.output_zip_buffer
@@ -2105,27 +2067,48 @@ if st.session_state.get('uploaded_dicom_files'):
             
             # 2. Series description clearly indicates a document/form
             doc_keywords = ['WORKSHEET', 'REPORT', 'SUMMARY', 'FORM', 'PAGE', 
-                           'CHART', 'GRAPH', 'DOCUMENT', 'SCREEN', 'TEXT', 'TABLE']
+                           'CHART', 'GRAPH', 'DOCUMENT', 'SCREEN', 'TEXT', 'TABLE',
+                           'OBSTETRIC', 'GENERAL REPORT', 'AUTHORISED']
             desc_indicates_doc = any(kw in series_desc for kw in doc_keywords)
             
             # 3. ImageType indicates derived/secondary content
             image_type_indicates_doc = any(kw in image_type for kw in 
-                ['SCREEN', 'REPORT', 'FOR PRESENTATION'])
+                ['SCREEN', 'REPORT', 'FOR PRESENTATION', 'DERIVED', 'SECONDARY'])
             
-            # 4. Very extreme aspect ratio (like a landscape document) - threshold now 1.6
-            is_very_extreme_aspect = aspect_ratio > 1.6 or aspect_ratio < 0.6
+            # 4. Very extreme aspect ratio (like a landscape document) - threshold now 1.5
+            is_very_extreme_aspect = aspect_ratio > 1.5 or aspect_ratio < 0.65
+            
+            # 5. NEW: Scanned document detection - check BitsStored
+            # Scanned documents are typically 1-bit (black/white) or 8-bit grayscale
+            # Real US images are typically 8-12 bits with actual ultrasound data
+            bits_stored = int(getattr(ds, 'BitsStored', 8))
+            bits_allocated = int(getattr(ds, 'BitsAllocated', 16))
+            photometric = str(getattr(ds, 'PhotometricInterpretation', '')).upper()
+            
+            # Scanned document indicators:
+            # - 1-bit: definitely a scanned document (black and white)
+            # - MONOCHROME1/2 with extreme aspect: likely a form/report
+            is_scanned_doc = bits_stored == 1
+            is_likely_form = (is_very_extreme_aspect and 
+                             rows > 1000 and cols > 800 and  # Large image
+                             photometric in ['MONOCHROME1', 'MONOCHROME2'])
             
             # DECISION LOGIC:
             # - If modality is SC/OT/SR/DOC → always a document
             # - If modality is US but has document keywords → document
+            # - If looks like a scanned form (1-bit or extreme aspect) → document
             # - If modality is US but normal content → US image
             
             if is_doc_modality:
                 is_document = True
                 is_pure_us = False
+            elif is_scanned_doc or is_likely_form:
+                # Scanned document regardless of modality
+                is_document = True
+                is_pure_us = False
             elif modality == 'US':
                 # For US modality, only classify as doc if DESCRIPTION says so
-                is_document = desc_indicates_doc
+                is_document = desc_indicates_doc or image_type_indicates_doc
                 is_pure_us = not is_document
             else:
                 # Other modalities
@@ -2164,143 +2147,208 @@ if st.session_state.get('uploaded_dicom_files'):
     if preview_files:
         st.markdown("### 🎨 Draw Redaction Mask")
         
-        # Separate: Documents (from bucket_docs) vs US images
-        # Only show bucket_docs files in the document grid - NOT all preview files
-        documents = bucket_docs.copy() if bucket_docs else []
+        # Use US images for mask drawing - documents are handled automatically
         us_images = bucket_us.copy() if bucket_us else []
+        documents = bucket_docs.copy() if bucket_docs else []
         
-        # Limit documents to first 8 for cleaner display
-        display_docs = documents[:8]
-        remaining_docs = len(documents) - 8 if len(documents) > 8 else 0
-        
-        # Track which document is being edited (if any)
-        if 'editing_worksheet' not in st.session_state:
-            st.session_state.editing_worksheet = None
-        
-        # ==== DOCUMENTS/WORKSHEETS - Grid at Top (max 8) ====
-        if display_docs:
-            st.markdown("#### 📋 Documents & Worksheets")
-            if remaining_docs > 0:
-                st.caption(f"Showing first 8 of {len(documents)} documents - click 'Set Mask' for individual PHI masking")
-            else:
-                st.caption(f"{len(display_docs)} documents found - click 'Set Mask' for individual PHI masking")
-            
-            # 4 columns for compact grid (max 8 = 2 rows)
-            cols_per_row = 4
-            for row_start in range(0, len(display_docs), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for col_idx, doc in enumerate(display_docs[row_start:row_start + cols_per_row]):
-                    doc_idx = row_start + col_idx  # Unique index for this document
-                    with cols[col_idx]:
-                        info = file_info_cache.get(doc.name, {})
-                        temp_path = info.get('temp_path', '')
-                        modality = info.get('modality', 'UNK')
-                        dims = info.get('dimensions', '?×?')
-                        
-                        # Thumbnail with high-quality downscaling
-                        try:
-                            pil_img, w, h = dicom_to_pil(temp_path)
-                            # Use LANCZOS for sharp downscaling
-                            thumb_size = 200  # Smaller for 4-column grid
-                            pil_img.thumbnail((thumb_size, thumb_size), Image.Resampling.LANCZOS)
-                            st.image(pil_img, use_container_width=True)
-                        except:
-                            st.markdown("📄 *Preview unavailable*")
-                        
-                        # Mask status indicator + modality/dimensions
-                        has_mask = doc.name in st.session_state.per_file_masks
-                        status = "✅" if has_mask else "⚪"
-                        st.caption(f"{status} **[{modality}]** {dims}")
-                        st.caption(f"{doc.name[:20]}...")
-                        
-                        # Set/Edit Mask button - use doc_idx for unique key
-                        btn_label = "✏️ Edit Mask" if has_mask else "🎯 Set Mask"
-                        if st.button(btn_label, key=f"doc_{doc_idx}_{doc.name}", use_container_width=True):
-                            st.session_state.editing_worksheet = doc.name
-                            st.session_state.editing_worksheet_idx = doc_idx
-                            st.rerun()
-            
-            # If editing a document, show the editor
-            if st.session_state.editing_worksheet:
-                ws_name = st.session_state.editing_worksheet
-                ws_idx = st.session_state.get('editing_worksheet_idx', 0)
-                ws_file = next((f for f in documents if f.name == ws_name), None)
-                
-                if ws_file:
-                    st.divider()
-                    st.markdown(f"##### 📝 Editing Mask for: `{ws_name}`")
-                    
-                    info = file_info_cache.get(ws_name, {})
-                    temp_path = info.get('temp_path', '')
-                    
-                    try:
-                        pil_img, orig_w, orig_h = dicom_to_pil(temp_path)
-                        st.image(pil_img, caption=f"{ws_name} ({orig_w}×{orig_h}px)", use_container_width=True)
-                        
-                        existing_mask = st.session_state.per_file_masks.get(ws_name, (0, 0, orig_w, 60))
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            mx = st.number_input("X", 0, orig_w, existing_mask[0], key=f"ws_mx_{ws_idx}")
-                        with col2:
-                            my = st.number_input("Y", 0, orig_h, existing_mask[1], key=f"ws_my_{ws_idx}")
-                        with col3:
-                            mw = st.number_input("Width", 10, orig_w, existing_mask[2], key=f"ws_mw_{ws_idx}")
-                        with col4:
-                            mh = st.number_input("Height", 10, orig_h, existing_mask[3], key=f"ws_mh_{ws_idx}")
-                        
-                        col_save, col_cancel = st.columns(2)
-                        with col_save:
-                            if st.button("✅ Save Mask", key=f"save_ws_{ws_idx}", type="primary", use_container_width=True):
-                                st.session_state.per_file_masks[ws_name] = (mx, my, mw, mh)
-                                st.session_state.editing_worksheet = None
-                                st.toast(f"✅ Mask saved for {ws_name}")
-                                st.rerun()
-                        with col_cancel:
-                            if st.button("❌ Cancel", key=f"cancel_ws_{ws_idx}", use_container_width=True):
-                                st.session_state.editing_worksheet = None
-                                st.rerun()
-                    except Exception as e:
-                        st.error(f"Could not load: {e}")
-            
-            st.divider()
+        # Show info about documents if any
+        if documents:
+            st.info(f"📋 **{len(documents)} document/worksheet files** detected - redaction mask from US image will be applied automatically.")
         
         # ==== US IMAGES - Show FIRST image only for shared mask ====
-        if us_images:
+        # Filter to ONLY actual pure US images (exclude documents that may be in bucket_us)
+        pure_us_images = [f for f in us_images if file_info_cache.get(f.name, {}).get('is_pure_us', False)]
+        
+        # If no pure US found but we have us_images, fall back to first non-document
+        if not pure_us_images and us_images:
+            # Filter out known documents
+            pure_us_images = [f for f in us_images if not file_info_cache.get(f.name, {}).get('is_worksheet', False)]
+        
+        if pure_us_images:
             st.markdown("#### 🔊 Ultrasound Mask")
-            st.caption(f"This mask will apply to ALL {len(us_images)} ultrasound images")
+            st.caption(f"This mask will apply to ALL {len(pure_us_images)} ultrasound images")
             
             # Show mask status
             if st.session_state.us_shared_mask:
                 mx, my, mw, mh = st.session_state.us_shared_mask
-                st.success(f"✅ Shared mask set: ({mx},{my}) {mw}×{mh}px → applies to {len(us_images)} images")
+                st.success(f"✅ Shared mask set: ({mx},{my}) {mw}×{mh}px → applies to {len(pure_us_images)} images")
             
-            # Show FIRST US image only
-            first_us = us_images[0]
+            # Show FIRST pure US image only
+            first_us = pure_us_images[0]
             info = file_info_cache.get(first_us.name, {})
             temp_path = info.get('temp_path', '')
             
             try:
                 pil_img, orig_w, orig_h = dicom_to_pil(temp_path)
-                st.image(pil_img, caption=f"Sample US Image: {first_us.name} ({orig_w}×{orig_h}px)", use_container_width=True)
                 
+                # Calculate display size (max 700px wide to fit in UI)
+                max_display_width = 700
+                scale = min(1.0, max_display_width / orig_w)
+                display_w = int(orig_w * scale)
+                display_h = int(orig_h * scale)
+                
+                st.markdown("**🎯 Click and drag to draw mask region:**")
+                st.caption("Draw a rectangle over the area you want to black out (e.g., patient info header)")
+                
+                # Prepare existing mask for initial rectangle
+                existing_mask = st.session_state.us_shared_mask
+                initial_drawing = None
+                if existing_mask:
+                    mx, my, mw, mh = existing_mask
+                    # Scale to display coordinates
+                    initial_drawing = {
+                        "version": "4.4.0",
+                        "objects": [{
+                            "type": "rect",
+                            "left": mx * scale,
+                            "top": my * scale,
+                            "width": mw * scale,
+                            "height": mh * scale,
+                            "fill": "rgba(0, 0, 0, 0.5)",
+                            "stroke": "#ff0000",
+                            "strokeWidth": 2
+                        }]
+                    }
+                
+                # Use drawable canvas for click-and-drag rectangle
+                # st_canvas is already imported from patched_canvas at top of file
+                
+                # Resize image for display
+                display_img = pil_img.resize((display_w, display_h))
+                
+                # Convert image to base64 for HTML canvas background
+                import io
+                import base64
+                buffered = io.BytesIO()
+                display_img.save(buffered, format="PNG")
+                img_b64 = base64.b64encode(buffered.getvalue()).decode()
+                
+                # Get existing mask if any
+                existing = st.session_state.us_shared_mask
+                init_x = int(existing[0] * scale) if existing else 0
+                init_y = int(existing[1] * scale) if existing else 0
+                init_w = int(existing[2] * scale) if existing else 0
+                init_h = int(existing[3] * scale) if existing else 0
+                
+                # Custom HTML5 Canvas with JavaScript for rectangle drawing
+                html_canvas = f"""
+                <div id="canvas-container" style="position:relative; display:inline-block;">
+                    <canvas id="maskCanvas" width="{display_w}" height="{display_h}" 
+                            style="border:2px solid #444; border-radius:4px; cursor:crosshair;"></canvas>
+                </div>
+                <div id="coords" style="margin-top:8px; color:#ccc; font-family:monospace;">
+                    Draw a rectangle on the image above
+                </div>
+                <input type="hidden" id="maskData" value="">
+                
+                <script>
+                    const canvas = document.getElementById('maskCanvas');
+                    const ctx = canvas.getContext('2d');
+                    const coordsDiv = document.getElementById('coords');
+                    const maskInput = document.getElementById('maskData');
+                    
+                    // Load background image
+                    const img = new Image();
+                    img.onload = function() {{
+                        ctx.drawImage(img, 0, 0, {display_w}, {display_h});
+                        // Draw existing mask if any
+                        if ({init_w} > 0 && {init_h} > 0) {{
+                            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                            ctx.strokeStyle = '#ff0000';
+                            ctx.lineWidth = 2;
+                            ctx.fillRect({init_x}, {init_y}, {init_w}, {init_h});
+                            ctx.strokeRect({init_x}, {init_y}, {init_w}, {init_h});
+                            coordsDiv.innerHTML = '📐 Current mask: X=' + {init_x} + ', Y=' + {init_y} + 
+                                                  ', W=' + {init_w} + ', H=' + {init_h};
+                        }}
+                    }};
+                    img.src = 'data:image/png;base64,{img_b64}';
+                    
+                    let isDrawing = false;
+                    let startX, startY, currentRect = null;
+                    
+                    canvas.onmousedown = function(e) {{
+                        const rect = canvas.getBoundingClientRect();
+                        startX = e.clientX - rect.left;
+                        startY = e.clientY - rect.top;
+                        isDrawing = true;
+                    }};
+                    
+                    canvas.onmousemove = function(e) {{
+                        if (!isDrawing) return;
+                        const rect = canvas.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        
+                        // Redraw image
+                        ctx.drawImage(img, 0, 0, {display_w}, {display_h});
+                        
+                        // Draw rectangle
+                        const w = x - startX;
+                        const h = y - startY;
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                        ctx.strokeStyle = '#ff0000';
+                        ctx.lineWidth = 2;
+                        ctx.fillRect(startX, startY, w, h);
+                        ctx.strokeRect(startX, startY, w, h);
+                        
+                        currentRect = {{x: Math.min(startX, x), y: Math.min(startY, y), 
+                                        w: Math.abs(w), h: Math.abs(h)}};
+                    }};
+                    
+                    canvas.onmouseup = function(e) {{
+                        if (!isDrawing) return;
+                        isDrawing = false;
+                        
+                        if (currentRect && currentRect.w > 5 && currentRect.h > 5) {{
+                            // Scale back to original image coordinates
+                            const scale = {scale};
+                            const origX = Math.round(currentRect.x / scale);
+                            const origY = Math.round(currentRect.y / scale);
+                            const origW = Math.round(currentRect.w / scale);
+                            const origH = Math.round(currentRect.h / scale);
+                            
+                            coordsDiv.innerHTML = '📐 <b>Mask region:</b> X=' + origX + ', Y=' + origY + 
+                                                  ', Width=' + origW + 'px, Height=' + origH + 'px' +
+                                                  '<br><span style="color:#4CAF50;">✓ Use the inputs below to apply</span>';
+                            
+                            // Store in hidden input for potential form submission
+                            maskInput.value = origX + ',' + origY + ',' + origW + ',' + origH;
+                            
+                            // Try to update Streamlit session state via URL params
+                            // (This is a workaround - Streamlit can read this)
+                            window.parent.postMessage({{
+                                type: 'streamlit:setComponentValue',
+                                data: {{x: origX, y: origY, w: origW, h: origH}}
+                            }}, '*');
+                        }}
+                    }};
+                    
+                    canvas.onmouseleave = function() {{ isDrawing = false; }};
+                </script>
+                """
+                
+                import streamlit.components.v1 as components
+                components.html(html_canvas, height=display_h + 60)
+                
+                # Manual input fallback (user can copy values from canvas display)
+                st.markdown("**Fine-tune coordinates manually** *(or enter values shown above):*")
                 existing_mask = st.session_state.us_shared_mask or (0, 0, orig_w, 80)
                 
-                st.markdown("**Define mask region (applies to all US):**")
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    us_mx = st.number_input("X", 0, orig_w, existing_mask[0], key="us_mx")
+                    us_mx = st.number_input("X", 0, orig_w, existing_mask[0], key="us_mx_manual")
                 with col2:
-                    us_my = st.number_input("Y", 0, orig_h, existing_mask[1], key="us_my")
+                    us_my = st.number_input("Y", 0, orig_h, existing_mask[1], key="us_my_manual")
                 with col3:
-                    us_mw = st.number_input("Width", 10, orig_w, existing_mask[2], key="us_mw")
+                    us_mw = st.number_input("Width", 10, orig_w, existing_mask[2], key="us_mw_manual")
                 with col4:
-                    us_mh = st.number_input("Height", 10, orig_h, existing_mask[3], key="us_mh")
+                    us_mh = st.number_input("Height", 10, orig_h, existing_mask[3], key="us_mh_manual")
                 
-                if st.button(f"✅ Apply Mask to ALL {len(us_images)} US Images", type="primary", use_container_width=True):
+                if st.button(f"✅ Apply Mask to ALL {len(pure_us_images)} US Images", type="primary", use_container_width=True):
                     st.session_state.us_shared_mask = (us_mx, us_my, us_mw, us_mh)
                     st.session_state.batch_mask = (us_mx, us_my, us_mw, us_mh)
-                    st.toast(f"✅ Mask applied to all {len(us_images)} US images")
+                    st.toast(f"✅ Mask applied to all {len(pure_us_images)} US images")
                     st.rerun()
                     
             except Exception as e:
@@ -2684,7 +2732,11 @@ if st.session_state.get('uploaded_dicom_files'):
                 # ═══════════════════════════════════════════════════════════════
                 import time
                 processing_start_time = time.time()
-                total_input_bytes = sum(f.size for f in all_files)
+                # Calculate total input bytes - handle both UploadedFile (.size) and BytesIO (len(getbuffer()))
+                total_input_bytes = sum(
+                    getattr(f, 'size', len(f.getbuffer()) if hasattr(f, 'getbuffer') else 0)
+                    for f in all_files
+                )
                 total_output_bytes = 0
                 
                 # Progress bar for multi-file processing
@@ -2956,8 +3008,8 @@ if st.session_state.get('uploaded_dicom_files'):
                             new_meta = {
                                 'patient_name': str(verification_ds.PatientName) if hasattr(verification_ds, 'PatientName') else 'ANONYMIZED',
                                 'patient_id': str(verification_ds.PatientID) if hasattr(verification_ds, 'PatientID') else 'ANONYMIZED',
-                                # FOI mode preserves accession for legal chain of custody
-                                'accession': (str(verification_ds.AccessionNumber) if hasattr(verification_ds, 'AccessionNumber') and verification_ds.AccessionNumber else orig_accession) if is_foi_mode else 'REMOVED',
+                                # FOI mode and Clinical Correction preserve accession for chain of custody/workflow
+                                'accession': (str(verification_ds.AccessionNumber) if hasattr(verification_ds, 'AccessionNumber') and verification_ds.AccessionNumber else orig_accession) if (is_foi_mode or pacs_operation_mode == "internal_repair") else 'REMOVED',
                                 'study_date': actual_study_date or 'DATE_MISSING'
                             }
                             audit_log = generate_audit_receipt(

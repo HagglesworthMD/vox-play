@@ -113,6 +113,12 @@ def st_canvas(
     )
     initial_drawing["background"] = background_color
 
+    # DEBUG: Confirm what we're passing to the component
+    print(f"[DEBUG patched_canvas] Calling component with:")
+    print(f"  - backgroundImageURL: {'SET (len=' + str(len(background_image_url)) + ')' if background_image_url else 'None'}")
+    print(f"  - backgroundColor: '{background_color}'")
+    print(f"  - canvasHeight: {height}, canvasWidth: {width}")
+
     component_value = _component_func(
         fillColor=fill_color,
         strokeWidth=stroke_width,

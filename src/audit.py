@@ -115,13 +115,18 @@ def generate_audit_receipt(
     # SOURCE OF TRUTH OVERRIDE
     # If the actual dataset is provided, use its values instead of the dictionary.
     if dataset:
-        # FOI MODE: Preserve accession number (legal chain of custody)
+        # Determine if we should preserve accession (FOI mode OR Clinical Correction)
+        # Clinical Correction (internal_repair) preserves accession for workflow continuity
+        is_clinical_correction = compliance_profile == "internal_repair"
+        preserve_accession = is_foi_mode or is_clinical_correction
+        
+        # FOI MODE or CLINICAL CORRECTION: Preserve accession number
         # RESEARCH MODE: Force to 'REMOVED' since we delete it
-        if not is_foi_mode:
+        if not preserve_accession:
             new_meta['accession'] = 'REMOVED'
             new_meta['accession_number'] = 'REMOVED'
         else:
-            # FOI mode - preserve the actual accession from dataset
+            # Preserve the actual accession from dataset
             if hasattr(dataset, 'AccessionNumber') and dataset.AccessionNumber:
                 new_meta['accession'] = str(dataset.AccessionNumber)
                 new_meta['accession_number'] = str(dataset.AccessionNumber)
@@ -291,8 +296,26 @@ def generate_audit_receipt(
             "Staff-identifying data has been REDACTED for employee privacy protection.",
             "═══════════════════════════════════════════════════════════════════════════════"
         ])
+    elif compliance_profile == "internal_repair":
+        # Clinical Correction specific section
+        audit_lines.extend([
+            "▶ CLINICAL CORRECTION CERTIFICATION",
+            "─────────────────────────────────────────────────────────────────────────────────",
+            "Processing Type:     Clinical Data Correction (Internal Repair)",
+            "✓ Patient Name:      CORRECTED (New value applied)",
+            "✓ Accession Number:  PRESERVED (Workflow Continuity)",
+            "✓ Study Date:        PRESERVED (Clinical Reference)",
+            "✓ Study/Series UIDs: PRESERVED (PACS Compatibility)",
+            "✓ Private Tags:      PRESERVED (Vendor Compatibility)",
+            "",
+            "═══════════════════════════════════════════════════════════════════════════════",
+            "This audit log records a clinical data correction for PACS workflow purposes.",
+            "Original study identifiers have been PRESERVED for clinical continuity.",
+            "Patient demographics have been CORRECTED as per operator input.",
+            "═══════════════════════════════════════════════════════════════════════════════"
+        ])
     else:
-        # Standard research/clinical compliance section
+        # Standard research compliance section
         audit_lines.extend([
             "▶ COMPLIANCE CERTIFICATION",
             "─────────────────────────────────────────────────────────────────────────────────",

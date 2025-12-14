@@ -502,7 +502,7 @@ class AtomicScrubOperation:
 # DEMONSTRATION / TEST
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import tempfile
     import shutil
     

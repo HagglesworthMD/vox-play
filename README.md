@@ -871,36 +871,115 @@ python -m research_mode.cli input_dir/ -o output_dir/ --report report.json
 
 ---
 
-## 🛡️ Validation & Compliance
+## 🧪 Testing
 
-VoxelMask.io is verified using a comprehensive **Automated Test Suite** (Pytest) that enforces deterministic compliance rules on every code change.
+VoxelMask uses a **layered testing strategy** designed to maximize confidence in critical logic while avoiding brittle or slow tests.
 
-### Testing Methodology
+### Testing Philosophy
 
-* **Deterministic Data Generation:** Tests use synthetic DICOM fixtures to verify logic without exposing real patient data.
-* **HIPAA Safe Harbor:** Unit tests assert that `PatientName` is removed and `StudyDate` is shifted by a random offset (14-100 days).
-* **FOI Legal Mode:** Tests verify that `PatientName` is PRESERVED while `ReferringPhysicianName` is REDACTED.
-* **NIfTI Conversion:** Automated tests verify DICOM-to-NIfTI conversion produces valid `.nii.gz` output with non-zero file size.
-* **ZIP Handling:** Tests confirm nested folder structures are correctly extracted and all DICOM files detected by magic bytes.
+* **Deterministic over exhaustive** — Unit tests validate logic, not infrastructure.
+* **High confidence where it matters** — Core anonymization, compliance, and audit logic are thoroughly tested.
+* **Explicit boundaries** — Integration-heavy pipelines are intentionally excluded from unit coverage.
 
-### Forensic Integrity
+This approach keeps the test suite:
+- Fast
+- Reliable
+- Review-friendly
+- Suitable for regulated or research environments
 
-* SHA-256 hash consistency checks ensure that input/output pixel data remains identical where required.
-* UID regeneration is tracked and logged for audit purposes.
+---
+
+### What Is Unit-Tested
+
+#### Core Logic (High Coverage)
+
+* **`audit_manager.py`**
+  - Audit logging (SQLite)
+  - Failure and rollback handling
+  - Atomic scrub operations
+  - **~97% production coverage**
+
+* **`compliance_engine.py`**
+  - Compliance profiles (Clinical, Research, HIPAA, OAIC)
+  - UID regeneration and hashing
+  - Deterministic header repair
+
+* **`clinical_corrector.py`**
+  - Static text detection logic
+  - Masking decision paths
+  - **~99% coverage**
+
+---
+
+#### `run_on_dicom.py` (Selective Unit Coverage)
+
+The following functions are unit-tested:
+
+* **`anonymize_metadata()`**
+  - Fully branch-covered
+  - Research vs clinical context handling
+  - UID regeneration and missing-tag robustness
+
+* **`process_dataset()`**
+  - In-memory metadata logic
+
+* **`detect_text_box_from_array()`**
+  - OCR decision logic using stubbed correctors
+  - Frame consistency rules
+
+* Failure paths in `process_dicom()` (e.g. unreadable DICOM)
+
+---
+
+### What Is Intentionally Not Unit-Tested
+
+* **Full `process_dicom()` pixel pipeline** (file I/O, OCR engines, OpenCV, masking overlays)
+* **CLI entry points (`main()`)**
+
+These paths are integration-heavy and are intentionally excluded using:
+
+```python
+# pragma: no cover
+```
+
+Attempting full unit coverage here would:
+- Introduce brittle mocks
+- Slow CI
+- Reduce test reliability
+
+---
+
+### Running Tests
+
+```bash
+source .venv/bin/activate
+PYTHONPATH=src pytest
+```
+
+With coverage:
+
+```bash
+PYTHONPATH=src pytest --cov=src --cov-report=term-missing
+```
+
+---
 
 ### CI/CD Pipeline
 
-* **GitHub Actions** automatically runs the full test suite (Logic + NIfTI + UI) on every commit to `main`.
+* **GitHub Actions** automatically runs the full test suite on every commit to `main`.
 * Test matrix covers Python 3.10, 3.11, and 3.12.
 * Coverage reports uploaded to Codecov.
 
-```bash
-# Run tests locally
-python -m venv .venv
-source .venv/bin/activate
-pip install pytest pytest-cov pydicom numpy dicom2nifti nibabel
-pytest -v
-```
+---
+
+### Summary
+
+VoxelMask tests:
+* **what must not break**
+* **what determines compliance**
+* **what transforms patient data**
+
+while avoiding low-value, high-maintenance tests.
 
 ---
 

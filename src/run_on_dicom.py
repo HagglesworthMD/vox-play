@@ -427,7 +427,9 @@ def detect_text_box_from_array(
     return None, all_detected_boxes
 
 
-def process_dicom(
+# NOTE: process_dicom is integration-heavy (I/O + pixel pipeline)
+# and is intentionally excluded from unit-level coverage.
+def process_dicom(  # pragma: no cover
     input_path: str,
     output_path: str,
     old_name_text: str,
@@ -889,7 +891,7 @@ def process_dicom(
     return True
 
 
-def main():
+def main():  # pragma: no cover
     """Main entry point with CLI argument parsing."""
     parser = argparse.ArgumentParser(
         description="De-identify patient information in DICOM ultrasound files",

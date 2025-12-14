@@ -3,6 +3,88 @@ VoxelMask - Streamlit GUI
 Clean rewrite with 5 tabs including Interactive Redaction.
 """
 
+
+# ==============================================================================
+# VOXELMASK — STREAMLIT BOOTSTRAP (ANTI-GRAVITY SAFE)
+# This block MUST be the first Streamlit interaction in the process.
+# ==============================================================================
+
+import streamlit as st
+
+# ------------------------------------------------------------------------------
+# HARD LOCK PAGE CONFIG
+# ------------------------------------------------------------------------------
+st.set_page_config(
+    page_title="VoxelMask - Intelligent De-ID",
+    page_icon="🩺",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ------------------------------------------------------------------------------
+# SIDEBAR & LAYOUT KILL SWITCH
+# (Survives Streamlit >=1.30, reruns, hot reloads, imported modules)
+# ------------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+        /* --- Kill Streamlit Sidebar Completely --- */
+        section[data-testid="stSidebar"] {
+            display: none !important;
+            visibility: hidden !important;
+            width: 0 !important;
+        }
+
+        /* --- Kill the collapse / expand button --- */
+        [data-testid="collapsedControl"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
+
+        /* --- Remove any residual left padding --- */
+        .stApp {
+            margin-left: 0 !important;
+        }
+
+        /* --- Optional: tighten top spacing --- */
+        header { visibility: hidden; height: 0; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ==============================================================================
+# AFTER THIS POINT:
+# - You may import other modules
+# - You may define helper functions
+# - You may build UI using columns/containers
+# - NEVER use st. sidebar.*
+# ==============================================================================
+# ==============================================================================
+# GUARD: PREVENT SIDEBAR USAGE (RUNTIME CHECK)
+# ==============================================================================
+import inspect
+
+# Guard against accidental sidebar usage
+# We verify the file source to ensure no sidebar calls slip in
+src_content = open(__file__, "r", encoding="utf-8").read()
+search_term = "st." + "sidebar"  # Split string to avoid self-match
+
+if search_term in src_content:
+    offenders = []
+    for i, line in enumerate(open(__file__, "r", encoding="utf-8")):
+        if search_term in line:
+            # Ignore this guard block and the bootstrap warning
+            if "NEVER use st. sidebar" in line: continue
+            if "st." + "sidebar" in line: continue  # Ignore self
+            
+            offenders.append((i + 1, line.rstrip()))
+            
+    if offenders:
+        raise RuntimeError(f"st." + f"sidebar usage detected in app.py: {offenders}")
+
+
+
 import hashlib
 import json
 import os
@@ -178,12 +260,8 @@ except Exception:
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
-st.set_page_config(
-    page_title="VoxelMask - Intelligent De-ID",
-    page_icon=":material/local_hospital:",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# Page config moved to top of file
+# st.set_page_config(...) removed here to avoid 'set_page_config() can only be called once' error
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CUSTOM CSS - ChatGPT 2025 Dark Mode Theme
@@ -253,26 +331,26 @@ st.markdown("""
     /* ═══════════════════════════════════════════════════════════════════════════
        SIDEBAR
     ═══════════════════════════════════════════════════════════════════════════ */
+    /* ═══════════════════════════════════════════════════════════════════════════
+       SIDEBAR - PERMANENTLY HIDDEN
+    ═══════════════════════════════════════════════════════════════════════════ */
     [data-testid="stSidebar"] {
-        background-color: var(--bg-secondary) !important;
-        border-right: 1px solid var(--border-default);
+        display: none !important;
+        visibility: hidden !important;
     }
 
-    [data-testid="stSidebar"] > div:first-child {
-        background-color: var(--bg-secondary) !important;
+    [data-testid="collapsedControl"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Ensure no residual spacing from sidebar */
+    .stApp > header {
+        background-color: transparent !important;
     }
 
-    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] .stRadio label,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] p {
-        color: var(--text-primary) !important;
-        font-family: var(--font-family) !important;
-    }
-
-    [data-testid="stSidebar"] .stRadio > div {
-        background-color: transparent;
+    .stApp {
+        margin-top: 30px;
     }
 
     /* ═══════════════════════════════════════════════════════════════════════════

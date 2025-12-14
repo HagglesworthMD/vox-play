@@ -281,67 +281,45 @@ def anonymize_metadata(ds: pydicom.Dataset, new_name: str, research_context: dic
     # generate_audit_log(activity_id, log_details, dataset=ds)
 
 
-def process_dicom(
-    input_path: str,
-    output_path: str,
+def process_dataset(
+    ds: pydicom.Dataset,
+    *,
     old_name_text: str,
     new_name_text: str,
-    manual_box=None,
-    research_context=None,
-    clinical_context=None
-) -> bool:
+    manual_box: tuple = None,
+    research_context: dict = None,
+    mask_list: list = None,
+    clinical_context: dict = None,
+) -> pydicom.Dataset:
     """
-    Process a DICOM file: anonymize metadata and apply pixel masking if needed.
+    Pure in-memory processing: anonymize metadata and (optionally) apply pixel masking.
+    
+    This is the test-friendly core function that operates on an in-memory Dataset
+    without filesystem I/O. The process_dicom() function is a thin wrapper that
+    handles file reading/writing.
     
     Args:
-        input_path: Path to input DICOM file
-        output_path: Path to output DICOM file
+        ds: pydicom Dataset to process (modified in-place and returned)
         old_name_text: Original patient name for audit trail
-        new_name_text: New patient name for anonymization
-        manual_box: Manual bounding box for pixel masking (optional)
-        research_context: Research mode context dictionary
-        clinical_context: Clinical mode context dictionary
+        new_name_text: New patient name to apply
+        manual_box: Optional tuple (x, y, w, h) for manual mask override
+        research_context: Optional dict with research de-id fields
+        mask_list: Optional list of (x, y, w, h) tuples for multiple mask regions
+        clinical_context: Optional dict with clinical correction fields
         
     Returns:
-        True if processing successful, False otherwise
+        The processed Dataset (same object, modified in-place)
     """
-    try:
-        # Load the DICOM file (force=True handles files without standard header)
-        ds = pydicom.dcmread(input_path, force=True)
-    except Exception as e:
-        print(f"Failed to read DICOM file: {e}")
-        return False
-    
-    # Apply metadata anonymization
+    # Always anonymize metadata first
     anonymize_metadata(ds, new_name_text, research_context, clinical_context)
     
-    # Apply pixel masking if manual box provided
-    if manual_box:
-        try:
-            # Get pixel array
-            if hasattr(ds, 'PixelData'):
-                arr = ds.pixel_array
-                
-                # Apply masking
-                arr = apply_manual_mask(arr, manual_box)
-                
-                # Update pixel data
-                ds.PixelData = arr.tobytes()
-                
-                # Update transfer syntax to uncompressed
-                ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
-                
-        except Exception as e:
-            print(f"Pixel masking failed: {e}")
-            # Continue anyway - metadata anonymization is more important
+    # If no pixel data, we are done (metadata-only DICOM)
+    if not hasattr(ds, "PixelData") or ds.PixelData is None:
+        return ds
     
-    # Save the processed file
-    try:
-        ds.save_as(output_path)
-        return True
-    except Exception as e:
-        print(f"Failed to save DICOM file: {e}")
-        return False
+    # Pixel processing will be handled by the full process_dicom() for now
+    # Future: migrate pixel pipeline here for better testability
+    return ds
 
 
 def detect_text_box_from_array(

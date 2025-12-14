@@ -285,13 +285,19 @@ class FOIEngine:
             return True, f"Structured Report (SR) - Text document"
         
         # Check image type for DERIVED/SECONDARY
+        # Note: ImageType may be list, tuple, or pydicom.MultiValue - all are iterable
         image_type = getattr(dataset, 'ImageType', [])
-        if isinstance(image_type, (list, tuple)):
-            if 'DERIVED' in image_type and 'SECONDARY' in image_type:
-                # Might be a worksheet/report
-                series_desc = str(getattr(dataset, 'SeriesDescription', '')).lower()
-                if any(w in series_desc for w in ['report', 'worksheet', 'summary', 'document']):
-                    return True, f"Derived Secondary - Worksheet/Report"
+        try:
+            # Normalize to uppercase strings (handles MultiValue, list, tuple)
+            image_type_values = [str(x).upper() for x in image_type]
+        except TypeError:
+            image_type_values = []
+        
+        if 'DERIVED' in image_type_values and 'SECONDARY' in image_type_values:
+            # Might be a worksheet/report
+            series_desc = str(getattr(dataset, 'SeriesDescription', '')).lower()
+            if any(w in series_desc for w in ['report', 'worksheet', 'summary', 'document']):
+                return True, f"Derived Secondary - Worksheet/Report"
         
         return False, ""
 

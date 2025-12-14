@@ -79,3 +79,4 @@ studies/
 
 # Build artifacts
 *.zip
+coverage.xml

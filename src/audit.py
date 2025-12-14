@@ -44,7 +44,7 @@ def extract_sonographer_initials(original_meta: Dict) -> str:
         # Handle regular name format: "John Smith" or "Smith, John"
         if ',' in name_to_process:
             # "Smith, John" -> S.J.
-            parts = name_to_process.split(',')
+            parts = [p.strip() for p in name_to_process.split(',')]
             if len(parts) >= 2 and parts[0] and parts[1]:
                 return f"{parts[0][0].upper()}.{parts[1][0].upper()}."
         else:

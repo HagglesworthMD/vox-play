@@ -127,7 +127,7 @@ from compliance_engine import DicomComplianceManager
 from nifti_handler import NiftiConverter, convert_dataset_to_nifti, generate_nifti_readme, generate_fallback_warning_file, check_dicom2nifti_available
 from foi_engine import FOIEngine, process_foi_request, exclude_scanned_documents
 from pdf_reporter import PDFReporter, create_report
-from review_session import ReviewSession, ReviewRegion, RegionSource, RegionAction
+from review_session import ReviewSession, ReviewRegion, RegionSource, RegionAction, preflight_scan_dataset
 from decision_trace import DecisionTraceCollector, DecisionTraceWriter, record_region_decisions
 
 # Define base directory for dynamic path construction
@@ -2248,6 +2248,27 @@ if st.session_state.get('uploaded_dicom_files'):
                 st.session_state.phi_review_session = ReviewSession.create(sop_instance_uid=sop_uid)
             except Exception:
                 st.session_state.phi_review_session = ReviewSession.create(sop_instance_uid='unknown')
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # PREFLIGHT SCAN: Detect Secondary Capture and Encapsulated PDF
+            # This is a passive, read-only scan that does NOT affect processing.
+            # Findings are stored for potential future review UI.
+            # Freeze-safe: informational only; no gating; no export changes.
+            # ═══════════════════════════════════════════════════════════════════
+            try:
+                for f in preview_files:
+                    finfo = file_info_cache.get(f.name, {})
+                    ftemp_path = finfo.get('temp_path', '')
+                    if ftemp_path and os.path.exists(ftemp_path):
+                        try:
+                            scan_ds = pydicom.dcmread(ftemp_path, force=True, stop_before_pixels=True)
+                            finding = preflight_scan_dataset(scan_ds)
+                            if finding is not None:
+                                st.session_state.phi_review_session.add_finding(finding)
+                        except Exception:
+                            pass  # Skip files that can't be read - non-fatal
+            except Exception:
+                pass  # Preflight scan failure is non-fatal - do not block session
         
         review_session = st.session_state.phi_review_session
         
@@ -2272,6 +2293,39 @@ if st.session_state.get('uploaded_dicom_files'):
                 st.metric("Manual Regions", summary['manual_regions'])
             with col3:
                 st.metric("Will Mask", summary['will_mask'])
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # PREFLIGHT FINDINGS INDICATOR (Read-Only, Informational)
+            # Shows detected Secondary Capture and Encapsulated PDF instances
+            # Freeze-safe: informational only; no gating; no export changes.
+            # ═══════════════════════════════════════════════════════════════════
+            if review_session.has_findings():
+                findings_summary = review_session.get_findings_summary()
+                sc_count = findings_summary.get('secondary_capture', 0)
+                pdf_count = findings_summary.get('encapsulated_pdf', 0)
+                
+                # Build warning message with finding counts
+                finding_items = []
+                if sc_count > 0:
+                    finding_items.append(f"**{sc_count}** Secondary Capture image{'s' if sc_count > 1 else ''}")
+                if pdf_count > 0:
+                    finding_items.append(f"**{pdf_count}** Encapsulated PDF{'s' if pdf_count > 1 else ''}")
+                
+                findings_text = " and ".join(finding_items)
+                
+                st.markdown("---")
+                st.warning(
+                    f"⚠️ **Non-Standard Objects Detected**\n\n"
+                    f"This study contains {findings_text}.\n\n"
+                    f"These objects are often overlooked during export. "
+                    f"Review carefully before proceeding."
+                )
+                st.caption(
+                    "ℹ️ *Secondary Capture images may contain scanned documents or screenshots. "
+                    "Encapsulated PDFs are documents embedded in DICOM format. "
+                    "Both may contain unmasked PHI. "
+                    "This warning is informational only and does not change masking or export.*"
+                )
             
             # ═══════════════════════════════════════════════════════════════════
             # BULK ACTIONS (PR 4)

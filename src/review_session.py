@@ -48,6 +48,107 @@ class DetectionStrength:
     HIGH = "HIGH"
 
 
+class FindingType:
+    """
+    Types of findings identified during preflight scan.
+    
+    Used to classify DICOM objects that require review attention.
+    """
+    SECONDARY_CAPTURE = "SECONDARY_CAPTURE"
+    ENCAPSULATED_PDF = "ENCAPSULATED_PDF"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SOP CLASS UIDs FOR PREFLIGHT DETECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Standard DICOM SOP Class UIDs for preflight detection
+SOP_CLASS_UIDS = {
+    "SECONDARY_CAPTURE": "1.2.840.10008.5.1.4.1.1.7",       # Secondary Capture Image Storage
+    "ENCAPSULATED_PDF": "1.2.840.10008.5.1.4.1.1.104.1",   # Encapsulated PDF Storage
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REVIEW FINDING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class ReviewFinding:
+    """
+    Represents a finding identified during preflight scan.
+    
+    This is a deterministic, reproducible record of DICOM objects that
+    require review attention (e.g., Secondary Capture, Encapsulated PDF).
+    
+    Contains ONLY UIDs and classification — no PHI.
+    """
+    sop_instance_uid: str
+    sop_class_uid: str
+    series_instance_uid: str
+    finding_type: str  # FindingType.SECONDARY_CAPTURE or FindingType.ENCAPSULATED_PDF
+    modality: Optional[str]  # DICOM Modality tag value (e.g., "SC", "DOC")
+    description: str  # Human-readable description
+    
+    @classmethod
+    def from_sop_class(
+        cls,
+        sop_instance_uid: str,
+        sop_class_uid: str,
+        series_instance_uid: str,
+        modality: Optional[str] = None,
+    ) -> Optional["ReviewFinding"]:
+        """
+        Create a ReviewFinding based on SOP Class UID classification.
+        
+        Returns None if the SOP Class UID is not a reviewable type.
+        
+        Args:
+            sop_instance_uid: SOP Instance UID of the DICOM object
+            sop_class_uid: SOP Class UID for classification
+            series_instance_uid: Series Instance UID
+            modality: Optional DICOM Modality tag value
+            
+        Returns:
+            ReviewFinding if classifiable, None otherwise
+        """
+        if sop_class_uid == SOP_CLASS_UIDS["SECONDARY_CAPTURE"]:
+            return cls(
+                sop_instance_uid=sop_instance_uid,
+                sop_class_uid=sop_class_uid,
+                series_instance_uid=series_instance_uid,
+                finding_type=FindingType.SECONDARY_CAPTURE,
+                modality=modality,
+                description="Secondary Capture image detected - may contain scanned documents or screenshots",
+            )
+        elif sop_class_uid == SOP_CLASS_UIDS["ENCAPSULATED_PDF"]:
+            return cls(
+                sop_instance_uid=sop_instance_uid,
+                sop_class_uid=sop_class_uid,
+                series_instance_uid=series_instance_uid,
+                finding_type=FindingType.ENCAPSULATED_PDF,
+                modality=modality,
+                description="Encapsulated PDF detected - document embedded in DICOM wrapper",
+            )
+        return None
+    
+    def to_dict(self) -> Dict[str, Optional[str]]:
+        """
+        Convert to dictionary for serialization.
+        
+        Returns:
+            Dictionary representation of the finding
+        """
+        return {
+            "sop_instance_uid": self.sop_instance_uid,
+            "sop_class_uid": self.sop_class_uid,
+            "series_instance_uid": self.series_instance_uid,
+            "finding_type": self.finding_type,
+            "modality": self.modality,
+            "description": self.description,
+        }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # REVIEW REGION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -196,6 +297,10 @@ class ReviewSession:
     
     Stored in Streamlit session_state, never persisted to database.
     Once accepted, the session is sealed and no further modifications are allowed.
+    
+    Attributes:
+        review_findings: List of ReviewFinding objects from preflight scan.
+                         These are informational records and do NOT affect processing.
     """
     session_id: str
     sop_instance_uid: str
@@ -203,6 +308,7 @@ class ReviewSession:
     review_started: bool
     review_accepted: bool
     created_at: str
+    review_findings: List[ReviewFinding] = field(default_factory=list)
     
     @classmethod
     def create(cls, sop_instance_uid: str) -> "ReviewSession":
@@ -213,7 +319,8 @@ class ReviewSession:
             regions=[],
             review_started=False,
             review_accepted=False,
-            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            review_findings=[],
         )
     
     def _check_not_sealed(self) -> None:
@@ -361,7 +468,7 @@ class ReviewSession:
         Get summary statistics.
         
         Returns:
-            Dictionary with region counts
+            Dictionary with region counts and findings count
         """
         active = self.get_active_regions()
         return {
@@ -370,4 +477,140 @@ class ReviewSession:
             "manual_regions": len([r for r in active if r.source == RegionSource.MANUAL]),
             "will_mask": len(self.get_masked_regions()),
             "will_unmask": len(self.get_unmasked_regions()),
+            "review_findings": len(self.review_findings),
         }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PREFLIGHT SCAN FINDINGS
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def add_finding(self, finding: ReviewFinding) -> None:
+        """
+        Add a preflight scan finding to the session.
+        
+        Findings are informational records that do NOT affect processing.
+        They can be added even after the session is sealed (read-only additions).
+        
+        Args:
+            finding: ReviewFinding to add
+        """
+        self.review_findings.append(finding)
+    
+    def get_findings(self) -> List[ReviewFinding]:
+        """
+        Get all preflight scan findings.
+        
+        Returns:
+            List of ReviewFinding objects
+        """
+        return list(self.review_findings)
+    
+    def get_findings_by_type(self, finding_type: str) -> List[ReviewFinding]:
+        """
+        Get findings filtered by type.
+        
+        Args:
+            finding_type: FindingType.SECONDARY_CAPTURE or FindingType.ENCAPSULATED_PDF
+            
+        Returns:
+            Filtered list of ReviewFinding objects
+        """
+        return [f for f in self.review_findings if f.finding_type == finding_type]
+    
+    def has_findings(self) -> bool:
+        """
+        Check if session has any preflight findings.
+        
+        Returns:
+            True if there are any findings, False otherwise
+        """
+        return len(self.review_findings) > 0
+    
+    def get_findings_summary(self) -> Dict[str, int]:
+        """
+        Get summary of findings by type.
+        
+        Returns:
+            Dictionary with finding type counts
+        """
+        return {
+            "total_findings": len(self.review_findings),
+            "secondary_capture": len(self.get_findings_by_type(FindingType.SECONDARY_CAPTURE)),
+            "encapsulated_pdf": len(self.get_findings_by_type(FindingType.ENCAPSULATED_PDF)),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PREFLIGHT SCAN UTILITY FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def preflight_scan_dataset(
+    ds,  # pydicom.Dataset - not typed to avoid import dependency
+) -> Optional[ReviewFinding]:
+    """
+    Perform preflight scan on a single DICOM dataset.
+    
+    Identifies Secondary Capture and Encapsulated PDF instances based on
+    SOP Class UID. This is a passive detection function that does NOT
+    modify the dataset or affect processing behavior.
+    
+    This function is deterministic and reproducible - the same dataset
+    will always produce the same finding (or None).
+    
+    Args:
+        ds: pydicom Dataset object
+        
+    Returns:
+        ReviewFinding if the dataset is a reviewable type, None otherwise
+        
+    Example:
+        >>> import pydicom
+        >>> ds = pydicom.dcmread("secondary_capture.dcm")
+        >>> finding = preflight_scan_dataset(ds)
+        >>> if finding:
+        ...     session.add_finding(finding)
+    """
+    # Extract required UIDs with safe defaults
+    sop_class_uid = getattr(ds, "SOPClassUID", None)
+    if sop_class_uid is None:
+        return None
+    
+    # Convert to string if pydicom UID object
+    sop_class_uid = str(sop_class_uid)
+    
+    sop_instance_uid = str(getattr(ds, "SOPInstanceUID", "UNKNOWN"))
+    series_instance_uid = str(getattr(ds, "SeriesInstanceUID", "UNKNOWN"))
+    modality = getattr(ds, "Modality", None)
+    if modality is not None:
+        modality = str(modality)
+    
+    # Use ReviewFinding.from_sop_class for classification
+    return ReviewFinding.from_sop_class(
+        sop_instance_uid=sop_instance_uid,
+        sop_class_uid=sop_class_uid,
+        series_instance_uid=series_instance_uid,
+        modality=modality,
+    )
+
+
+def preflight_scan_datasets(
+    datasets: list,  # List of pydicom.Dataset
+) -> List[ReviewFinding]:
+    """
+    Perform preflight scan on multiple DICOM datasets.
+    
+    Convenience function for batch processing.
+    
+    Args:
+        datasets: List of pydicom Dataset objects
+        
+    Returns:
+        List of ReviewFinding objects for all reviewable datasets
+    """
+    findings = []
+    for ds in datasets:
+        finding = preflight_scan_dataset(ds)
+        if finding is not None:
+            findings.append(finding)
+    return findings
+

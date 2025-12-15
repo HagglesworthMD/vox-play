@@ -80,3 +80,6 @@ studies/
 # Build artifacts
 *.zip
 coverage.xml
+
+# Local debug / UI inspection utilities
+check_sidebar.py

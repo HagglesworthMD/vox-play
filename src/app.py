@@ -126,6 +126,7 @@ from compliance_engine import DicomComplianceManager
 from nifti_handler import NiftiConverter, convert_dataset_to_nifti, generate_nifti_readme, generate_fallback_warning_file, check_dicom2nifti_available
 from foi_engine import FOIEngine, process_foi_request, exclude_scanned_documents
 from pdf_reporter import PDFReporter, create_report
+from review_session import ReviewSession, ReviewRegion, RegionSource, RegionAction
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -213,6 +214,10 @@ mask_width = 0
 mask_height = 0
 frame_w = 0
 frame_h = 0
+
+# Initialize review session state for Sprint 2 burned-in PHI review
+if 'phi_review_session' not in st.session_state:
+    st.session_state.phi_review_session = None  # ReviewSession object
 
 def generate_clinical_filename(original_filename: str, new_patient_id: str, series_description: str) -> str:
     """
@@ -2221,6 +2226,80 @@ if st.session_state.get('uploaded_dicom_files'):
                 'temp_path': temp_path,
                 'worksheet_score': 0
             }
+    
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # SPRINT 2: BURNED-IN PHI REVIEW SCAFFOLD (Read-Only)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    if preview_files and (bucket_us or bucket_docs):
+        # Initialize or update review session
+        if st.session_state.phi_review_session is None:
+            # Create new session with first available file's SOP UID
+            try:
+                first_file = preview_files[0]
+                info = file_info_cache.get(first_file.name, {})
+                temp_path = info.get('temp_path', '')
+                if temp_path and os.path.exists(temp_path):
+                    ds = pydicom.dcmread(temp_path, force=True, stop_before_pixels=True)
+                    sop_uid = str(getattr(ds, 'SOPInstanceUID', 'unknown'))
+                else:
+                    sop_uid = 'unknown'
+                st.session_state.phi_review_session = ReviewSession.create(sop_instance_uid=sop_uid)
+            except Exception:
+                st.session_state.phi_review_session = ReviewSession.create(sop_instance_uid='unknown')
+        
+        review_session = st.session_state.phi_review_session
+        
+        # Review panel - collapsed by default
+        with st.expander("🔍 **Burned-In PHI Review** (Preview)", expanded=False):
+            st.caption("Sprint 2: Human-in-the-loop review for burned-in text regions")
+            
+            # Status badge
+            if review_session.review_accepted:
+                st.success("✅ Review accepted - ready for export")
+            elif review_session.review_started:
+                st.warning("⏳ Review in progress")
+            else:
+                st.info("📋 Review not started - regions shown below are auto-detected defaults")
+            
+            # Summary metrics
+            summary = review_session.get_summary()
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Detected Regions", summary['ocr_regions'])
+            with col2:
+                st.metric("Manual Regions", summary['manual_regions'])
+            with col3:
+                st.metric("Will Mask", summary['will_mask'])
+            
+            # Region list (read-only for now)
+            regions = review_session.get_active_regions()
+            if regions:
+                st.markdown("**Region List:**")
+                # Create table data
+                region_table = []
+                for idx, region in enumerate(regions):
+                    source_icon = "🔍 OCR" if region.source == RegionSource.OCR else "✏️ Manual"
+                    action_icon = "🔴 MASK" if region.get_effective_action() == RegionAction.MASK else "🟢 UNMASK"
+                    region_table.append({
+                        "#": idx + 1,
+                        "Source": source_icon,
+                        "Coordinates": f"({region.x}, {region.y}) {region.w}×{region.h}",
+                        "Action": action_icon
+                    })
+                
+                # Display as dataframe (read-only)
+                import pandas as pd
+                st.dataframe(
+                    pd.DataFrame(region_table),
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.markdown("*No regions detected yet. Regions will appear after OCR detection runs.*")
+            
+            # Placeholder for future interactivity
+            st.markdown("---")
+            st.caption("⚙️ **Coming Soon:** Toggle masks, add manual regions, Accept & Continue")
     
     if preview_files:
         st.markdown("### 🎨 Draw Redaction Mask")

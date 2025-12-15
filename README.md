@@ -844,6 +844,7 @@ python -m research_mode.cli input_dir/ -o output_dir/ --report report.json
 ### Security Features
 - SHA-256 hash verification (input/output)
 - Audit database logging (SQLite)
+- Audit logs are structurally PHI-free and enforced by automated tests
 - Operator tracking
 - Secret salt management for reproducible anonymization
 

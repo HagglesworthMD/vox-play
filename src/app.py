@@ -2271,35 +2271,127 @@ if st.session_state.get('uploaded_dicom_files'):
             with col3:
                 st.metric("Will Mask", summary['will_mask'])
             
-            # Region list (read-only for now)
+            # ═══════════════════════════════════════════════════════════════════
+            # BULK ACTIONS (PR 4)
+            # ═══════════════════════════════════════════════════════════════════
+            if not review_session.is_sealed():
+                st.markdown("**Bulk Actions:**")
+                bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
+                
+                with bulk_col1:
+                    if st.button("🔴 Mask All Detected", key="bulk_mask_all", use_container_width=True):
+                        review_session.mask_all_detected()
+                        if not review_session.review_started:
+                            review_session.start_review()
+                        st.rerun()
+                
+                with bulk_col2:
+                    if st.button("🟢 Unmask All", key="bulk_unmask_all", use_container_width=True):
+                        review_session.unmask_all()
+                        if not review_session.review_started:
+                            review_session.start_review()
+                        st.rerun()
+                
+                with bulk_col3:
+                    if st.button("🔄 Reset to Defaults", key="bulk_reset", use_container_width=True):
+                        review_session.reset_to_defaults()
+                        st.rerun()
+                
+                st.markdown("---")
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # REGION LIST WITH TOGGLE BUTTONS (PR 4)
+            # ═══════════════════════════════════════════════════════════════════
             regions = review_session.get_active_regions()
             if regions:
                 st.markdown("**Region List:**")
-                # Create table data
-                region_table = []
+                
                 for idx, region in enumerate(regions):
                     source_icon = "🔍 OCR" if region.source == RegionSource.OCR else "✏️ Manual"
-                    action_icon = "🔴 MASK" if region.get_effective_action() == RegionAction.MASK else "🟢 UNMASK"
-                    region_table.append({
-                        "#": idx + 1,
-                        "Source": source_icon,
-                        "Coordinates": f"({region.x}, {region.y}) {region.w}×{region.h}",
-                        "Action": action_icon
-                    })
-                
-                # Display as dataframe (read-only)
-                import pandas as pd
-                st.dataframe(
-                    pd.DataFrame(region_table),
-                    hide_index=True,
-                    use_container_width=True
-                )
+                    current_action = region.get_effective_action()
+                    action_icon = "🔴 MASK" if current_action == RegionAction.MASK else "🟢 UNMASK"
+                    
+                    # Create row with info and toggle button
+                    row_col1, row_col2, row_col3, row_col4 = st.columns([1, 2, 3, 2])
+                    
+                    with row_col1:
+                        st.markdown(f"**#{idx + 1}**")
+                    
+                    with row_col2:
+                        st.markdown(source_icon)
+                    
+                    with row_col3:
+                        st.markdown(f"`({region.x}, {region.y}) {region.w}×{region.h}`")
+                    
+                    with row_col4:
+                        if review_session.is_sealed():
+                            # Show static badge if sealed
+                            st.markdown(action_icon)
+                        else:
+                            # Toggle button
+                            toggle_label = "🟢 Unmask" if current_action == RegionAction.MASK else "🔴 Mask"
+                            if st.button(toggle_label, key=f"toggle_{region.region_id}", use_container_width=True):
+                                review_session.toggle_region(region.region_id)
+                                if not review_session.review_started:
+                                    review_session.start_review()
+                                st.rerun()
+                    
+                    # Delete button for manual regions (on separate row to avoid crowding)
+                    if region.can_delete() and not review_session.is_sealed():
+                        if st.button(f"🗑️ Delete Region #{idx + 1}", key=f"delete_{region.region_id}"):
+                            review_session.delete_region(region.region_id)
+                            st.rerun()
+                    
+                    # Visual separator between regions
+                    st.markdown("<div style='border-bottom: 1px solid #30363d; margin: 4px 0;'></div>", unsafe_allow_html=True)
             else:
                 st.markdown("*No regions detected yet. Regions will appear after OCR detection runs.*")
             
-            # Placeholder for future interactivity
+            # ═══════════════════════════════════════════════════════════════════
+            # ADD MANUAL REGION (PR 4)
+            # ═══════════════════════════════════════════════════════════════════
+            if not review_session.is_sealed():
+                st.markdown("---")
+                st.markdown("**Add Manual Region:**")
+                st.caption("Draw a rectangle by specifying coordinates (pixels)")
+                
+                manual_col1, manual_col2, manual_col3, manual_col4 = st.columns(4)
+                with manual_col1:
+                    manual_x = st.number_input("X", min_value=0, max_value=2000, value=0, key="manual_x")
+                with manual_col2:
+                    manual_y = st.number_input("Y", min_value=0, max_value=2000, value=0, key="manual_y")
+                with manual_col3:
+                    manual_w = st.number_input("Width", min_value=1, max_value=2000, value=100, key="manual_w")
+                with manual_col4:
+                    manual_h = st.number_input("Height", min_value=1, max_value=2000, value=50, key="manual_h")
+                
+                if st.button("➕ Add Manual Region", key="add_manual_region"):
+                    review_session.add_manual_region(
+                        x=int(manual_x), 
+                        y=int(manual_y), 
+                        w=int(manual_w), 
+                        h=int(manual_h)
+                    )
+                    if not review_session.review_started:
+                        review_session.start_review()
+                    st.rerun()
+                
+                # Clear all manual regions
+                if summary['manual_regions'] > 0:
+                    if st.button("🗑️ Clear All Manual Regions", key="clear_manual"):
+                        review_session.clear_manual_regions()
+                        st.rerun()
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # STATUS FOOTER (PR 4)
+            # ═══════════════════════════════════════════════════════════════════
             st.markdown("---")
-            st.caption("⚙️ **Coming Soon:** Toggle masks, add manual regions, Accept & Continue")
+            if review_session.is_sealed():
+                st.success("✅ Review complete. Regions locked for export.")
+            else:
+                modified_count = len([r for r in regions if r.is_modified()])
+                if modified_count > 0:
+                    st.info(f"📝 {modified_count} region(s) modified from defaults")
     
     if preview_files:
         st.markdown("### 🎨 Draw Redaction Mask")

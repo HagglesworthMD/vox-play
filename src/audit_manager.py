@@ -13,7 +13,7 @@ Features:
 import sqlite3
 import uuid
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 from contextlib import contextmanager
 
@@ -165,7 +165,7 @@ class AuditLogger:
         Raises:
             sqlite3.Error: If database write fails
         """
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         
         with self._get_connection() as conn:
             cursor = conn.cursor()

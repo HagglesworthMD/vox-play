@@ -100,6 +100,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pydicom
+import uuid
 import streamlit as st
 from PIL import Image
 
@@ -127,6 +128,7 @@ from nifti_handler import NiftiConverter, convert_dataset_to_nifti, generate_nif
 from foi_engine import FOIEngine, process_foi_request, exclude_scanned_documents
 from pdf_reporter import PDFReporter, create_report
 from review_session import ReviewSession, ReviewRegion, RegionSource, RegionAction
+from decision_trace import DecisionTraceCollector, DecisionTraceWriter, record_region_decisions
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2383,15 +2385,30 @@ if st.session_state.get('uploaded_dicom_files'):
                         st.rerun()
             
             # ═══════════════════════════════════════════════════════════════════
-            # STATUS FOOTER (PR 4)
+            # ACCEPT & CONTINUE (PR 5 - Accept Gating)
             # ═══════════════════════════════════════════════════════════════════
             st.markdown("---")
             if review_session.is_sealed():
-                st.success("✅ Review complete. Regions locked for export.")
+                st.success("✅ Review accepted. Regions locked — ready for export.")
             else:
+                # Show modification status
                 modified_count = len([r for r in regions if r.is_modified()])
                 if modified_count > 0:
                     st.info(f"📝 {modified_count} region(s) modified from defaults")
+                
+                # Accept button - only shows when review has started
+                if review_session.can_accept():
+                    st.markdown("---")
+                    st.markdown("**Ready to proceed?**")
+                    st.caption("⚠️ Once accepted, region decisions are locked and cannot be changed.")
+                    
+                    if st.button("✅ Accept & Continue", key="accept_review", type="primary", use_container_width=True):
+                        review_session.accept()
+                        st.success("✅ Review accepted! You may now proceed to export.")
+                        st.rerun()
+                else:
+                    # Review not started yet - prompt user to interact
+                    st.caption("💡 *Toggle regions above or add manual regions to begin review.*")
     
     if preview_files:
         st.markdown("### 🎨 Draw Redaction Mask")
@@ -2912,6 +2929,22 @@ if st.session_state.get('uploaded_dicom_files'):
                 if process_btn:
                     st.warning("⚠️ Please enter a patient name before processing")
                 can_process = False
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # EXPORT GATING (PR 5): Require review acceptance for burned-in PHI
+            # ═══════════════════════════════════════════════════════════════════
+            review_session = st.session_state.get('phi_review_session')
+            requires_phi_review = (bucket_us or bucket_docs) and review_session is not None
+            
+            if requires_phi_review and not review_session.review_accepted:
+                if process_btn:
+                    st.error("🚫 **Review not accepted.** Please complete the burned-in PHI review and click 'Accept & Continue' before proceeding.")
+                can_process = False
+            elif requires_phi_review and review_session.review_accepted:
+                # Show confirmation that review is complete
+                if process_btn:
+                    summary = review_session.get_summary()
+                    st.success(f"✅ Review accepted: {summary['will_mask']} region(s) to mask, {summary['will_unmask']} override(s)")
             
             if process_btn and can_process:
                 # Note: Accession numbers are generated per-file automatically
@@ -3577,6 +3610,21 @@ if st.session_state.get('uploaded_dicom_files'):
                                     'processed_hash': processed_files[0].get('processed_hash', 'N/A')[:32] if processed_files else 'N/A',
                                 }
                                 
+                                # ═══════════════════════════════════════════════════════════════
+                                # REVIEWER ACTION SUMMARY (PR 5 - counts only, no PHI)
+                                # ═══════════════════════════════════════════════════════════════
+                                phi_review = st.session_state.get('phi_review_session')
+                                if phi_review is not None and phi_review.review_accepted:
+                                    review_summary = phi_review.get_summary()
+                                    pdf_data['reviewer_summary'] = {
+                                        'reviewed': True,
+                                        'ocr_regions': review_summary['ocr_regions'],
+                                        'manual_regions': review_summary['manual_regions'],
+                                        'will_mask': review_summary['will_mask'],
+                                        'will_unmask': review_summary['will_unmask'],
+                                        'total_regions': review_summary['total_regions']
+                                    }
+                                
                                 # Add mode-specific data
                                 if report_type == "RESEARCH":
                                     pdf_data.update({
@@ -3686,6 +3734,58 @@ Studies in this archive:
                         'series': len(unique_series),
                         'files': len(processed_files)
                     }
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # DECISION TRACE COMMIT (PR 5 - Atomic Export Integration)
+                    # Record reviewer region decisions to SQLite ONLY after successful export
+                    # ═══════════════════════════════════════════════════════════════
+                    review_session = st.session_state.get('phi_review_session')
+                    if review_session is not None and review_session.review_accepted:
+                        try:
+                            # Create collector and record all region decisions
+                            collector = DecisionTraceCollector()
+                            active_regions = review_session.get_active_regions()
+                            sop_uid = review_session.sop_instance_uid
+                            
+                            # Record each region decision to the collector
+                            decisions_recorded = record_region_decisions(
+                                collector=collector,
+                                regions=active_regions,
+                                sop_instance_uid=sop_uid
+                            )
+                            
+                            # Commit to SQLite atomically
+                            db_path = os.path.join(BASE_DIR, 'scrub_history.db')
+                            writer = DecisionTraceWriter(db_path)
+                            
+                            # Generate scrub UUID from audit logger if available
+                            scrub_uuid = (
+                                st.session_state.audit_logger.generate_scrub_uuid() 
+                                if hasattr(st.session_state, 'audit_logger') and st.session_state.audit_logger
+                                else str(uuid.uuid4())
+                            )
+                            
+                            writer.commit(scrub_uuid, collector)
+                            
+                            # Log success to combined audit
+                            summary = review_session.get_summary()
+                            decision_summary = (
+                                f"\n\n--- Reviewer Region Decision Trace (Sprint 2) ---\n"
+                                f"Session ID: {review_session.session_id}\n"
+                                f"SOP Instance UID: {sop_uid[:32]}...\n"
+                                f"Total Regions: {summary['total_regions']}\n"
+                                f"OCR Detected: {summary['ocr_regions']}\n"
+                                f"Manual: {summary['manual_regions']}\n"
+                                f"Will Mask: {summary['will_mask']}\n"
+                                f"Overrides (Unmask): {summary['will_unmask']}\n"
+                                f"Decision Records Committed: {decisions_recorded}\n"
+                                f"Scrub UUID: {scrub_uuid}\n"
+                            )
+                            st.session_state.combined_audit_logs += decision_summary
+                            
+                        except Exception as e:
+                            # Log warning but don't fail export
+                            st.warning(f"Decision trace recording failed: {e}")
                     
                     st.session_state.output_zip_buffer = zip_buffer.getvalue()
                     

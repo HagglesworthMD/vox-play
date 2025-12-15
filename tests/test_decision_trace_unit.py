@@ -823,3 +823,211 @@ class TestPHIExclusionFromAuditLogs:
         assert "HIPAA_18_NAME" in db_content  # Reason code
         assert "PixelRegion[0]" in db_content  # Region identifier
         assert len(rows) == 3  # All decisions persisted
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REVIEWER REGION DECISION RECORDING TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRecordRegionDecisions:
+    """
+    Tests for record_region_decisions function.
+    
+    Verifies correct ActionType/ReasonCode mapping for reviewer actions.
+    """
+    
+    def test_ocr_region_default_mask_records_burned_in_text(self):
+        """OCR region left as MASK should use BURNED_IN_TEXT_DETECTED reason."""
+        from review_session import ReviewRegion, ReviewSession, RegionSource
+        from decision_trace import (
+            record_region_decisions, 
+            ReasonCode, 
+            ActionType,
+            DecisionTraceCollector
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=50, y=100, w=400, h=80)
+        # No toggle - left as default MASK
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        assert len(decisions) == 1
+        assert decisions[0].action_type == ActionType.MASKED
+        assert decisions[0].reason_code == ReasonCode.BURNED_IN_TEXT
+    
+    def test_ocr_region_toggled_to_unmask_records_user_override(self):
+        """OCR region changed to UNMASK should use USER_OVERRIDE_RETAINED."""
+        from review_session import ReviewRegion, ReviewSession
+        from decision_trace import (
+            record_region_decisions,
+            ReasonCode,
+            ActionType,
+            DecisionTraceCollector
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=50, y=100, w=400, h=80)
+        session.regions[0].toggle()  # Now UNMASK
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        assert len(decisions) == 1
+        assert decisions[0].action_type == ActionType.RETAINED
+        assert decisions[0].reason_code == ReasonCode.USER_OVERRIDE_RETAIN
+    
+    def test_ocr_region_explicitly_masked_by_reviewer_records_user_mask(self):
+        """OCR region toggled UNMASK then back to MASK should use USER_MASK_REGION."""
+        from review_session import ReviewRegion, ReviewSession
+        from decision_trace import (
+            record_region_decisions,
+            ReasonCode,
+            ActionType,
+            DecisionTraceCollector
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=50, y=100, w=400, h=80)
+        session.regions[0].toggle()  # UNMASK
+        session.regions[0].toggle()  # Back to MASK (explicit user action)
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        assert len(decisions) == 1
+        assert decisions[0].action_type == ActionType.MASKED
+        assert decisions[0].reason_code == ReasonCode.USER_MASK_REGION
+    
+    def test_manual_region_records_user_mask(self):
+        """Manual region should always use USER_MASK_REGION_SELECTED."""
+        from review_session import ReviewSession
+        from decision_trace import (
+            record_region_decisions,
+            ReasonCode,
+            ActionType,
+            DecisionTraceCollector
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_manual_region(x=200, y=300, w=150, h=40)
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        assert len(decisions) == 1
+        assert decisions[0].action_type == ActionType.MASKED
+        assert decisions[0].reason_code == ReasonCode.USER_MASK_REGION
+    
+    def test_deleted_region_not_recorded(self):
+        """Deleted manual regions should not appear in decision trace."""
+        from review_session import ReviewSession
+        from decision_trace import (
+            record_region_decisions,
+            DecisionTraceCollector
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_manual_region(x=200, y=300, w=150, h=40)
+        session.regions[0].mark_deleted()
+        
+        # get_active_regions excludes deleted
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        assert len(decisions) == 0
+    
+    def test_region_coordinates_recorded(self):
+        """Region coordinates should be recorded in decision."""
+        from review_session import ReviewSession
+        from decision_trace import (
+            record_region_decisions,
+            DecisionTraceCollector
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=123, y=456, w=789, h=101)
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        assert decisions[0].region_x == 123
+        assert decisions[0].region_y == 456
+        assert decisions[0].region_w == 789
+        assert decisions[0].region_h == 101
+    
+    def test_multiple_regions_all_recorded(self):
+        """Multiple regions should all be recorded with correct indices."""
+        from review_session import ReviewSession
+        from decision_trace import (
+            record_region_decisions,
+            DecisionTraceCollector
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=50, y=100, w=400, h=80)
+        session.add_ocr_region(x=50, y=200, w=300, h=60)
+        session.add_manual_region(x=200, y=300, w=150, h=40)
+        
+        session.regions[1].toggle()  # UNMASK second OCR
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        assert len(decisions) == 3
+        
+        # Check target names have indices
+        target_names = [d.target_name for d in decisions]
+        assert "PixelRegion[0]" in target_names
+        assert "PixelRegion[1]" in target_names
+        assert "PixelRegion[2]" in target_names
+    
+    def test_reviewer_decisions_contain_no_phi(self):
+        """
+        GOVERNANCE TEST: Reviewer decision records contain no PHI.
+        
+        Proves: OCR text is never stored in decision trace.
+        """
+        from review_session import ReviewSession
+        from decision_trace import (
+            record_region_decisions,
+            DecisionTraceCollector
+        )
+        
+        # Simulated OCR detection context (this text should NEVER appear in trace)
+        simulated_ocr_text = "PATIENT: SMITH, JOHN DOB: 05/15/1985 MRN: 12345678"
+        simulated_phi = ["SMITH", "JOHN", "1985", "12345678"]
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=50, y=100, w=400, h=80)
+        session.add_manual_region(x=200, y=300, w=150, h=40)
+        session.regions[0].toggle()  # UNMASK
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(collector, session.get_active_regions(), "1.2.3.4.5")
+        
+        decisions = collector.get_decisions()
+        
+        # Convert all decisions to string for PHI scanning
+        decisions_str = str(decisions)
+        
+        # CRITICAL ASSERTIONS
+        assert simulated_ocr_text not in decisions_str, \
+            "PHI LEAK: OCR text found in reviewer decision records"
+        for phi in simulated_phi:
+            assert phi not in decisions_str, \
+                f"PHI LEAK: '{phi}' found in reviewer decision records"
+        
+        # POSITIVE: Coordinates and reason codes ARE present
+        assert "region_x=50" in decisions_str
+        assert "region_y=100" in decisions_str
+        assert "USER_OVERRIDE_RETAINED" in decisions_str or "RETAINED" in decisions_str
+

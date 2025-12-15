@@ -597,3 +597,98 @@ def get_foi_reason_code(tag_name: str, is_staff: bool) -> str:
     if is_staff:
         return ReasonCode.FOI_STAFF_REDACT
     return ReasonCode.FOI_PRESERVE_PATIENT
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REVIEWER REGION DECISION RECORDING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def record_region_decisions(
+    collector: DecisionTraceCollector,
+    regions: List,  # List[ReviewRegion] - avoid circular import
+    sop_instance_uid: str
+) -> int:
+    """
+    Record all region decisions to the Decision Trace.
+    
+    Maps ReviewRegion actions to appropriate ActionType and ReasonCode:
+    - OCR region, default MASK → BURNED_IN_TEXT_DETECTED
+    - OCR region, reviewer UNMASK → USER_OVERRIDE_RETAINED  
+    - OCR region, reviewer MASK (explicit) → USER_MASK_REGION_SELECTED
+    - Manual region → USER_MASK_REGION_SELECTED
+    
+    Called at export time, after reviewer has accepted.
+    
+    Args:
+        collector: DecisionTraceCollector to add decisions to
+        regions: List of active (non-deleted) ReviewRegion objects
+        sop_instance_uid: SOP Instance UID for scope_uid
+        
+    Returns:
+        Number of decisions recorded
+    
+    Note:
+        This function intentionally has no access to OCR text content.
+        ReviewRegion contains only coordinates and action state.
+    """
+    # Import here to avoid circular dependency
+    from review_session import RegionSource, RegionAction
+    
+    count = 0
+    for idx, region in enumerate(regions):
+        # Skip deleted regions (should already be filtered, but defensive)
+        if hasattr(region, 'is_deleted') and region.is_deleted():
+            continue
+        
+        # Determine final action
+        final_action = region.get_effective_action()
+        
+        if final_action == RegionAction.MASK:
+            # Determine reason code based on source and whether reviewer modified
+            if region.source == RegionSource.MANUAL:
+                # Manual region always USER action
+                reason = ReasonCode.USER_MASK_REGION
+                rule_source = RuleSource.USER_MASK_INPUT
+            elif region.reviewer_action == RegionAction.MASK:
+                # Reviewer explicitly set to MASK (after toggling)
+                reason = ReasonCode.USER_MASK_REGION
+                rule_source = RuleSource.USER_MASK_INPUT
+            else:
+                # Default OCR detection, unchanged by reviewer
+                reason = ReasonCode.BURNED_IN_TEXT
+                rule_source = RuleSource.MODALITY_SAFETY_PROTOCOL
+            
+            collector.add(
+                scope_level=ScopeLevel.PIXEL_REGION,
+                scope_uid=sop_instance_uid,
+                action_type=ActionType.MASKED,
+                target_type=TargetType.PIXEL_REGION,
+                target_name=f"PixelRegion[{idx}]",
+                reason_code=reason,
+                rule_source=rule_source,
+                region_x=region.x,
+                region_y=region.y,
+                region_w=region.w,
+                region_h=region.h
+            )
+            count += 1
+        
+        elif final_action == RegionAction.UNMASK:
+            # Reviewer chose to retain (not mask)
+            collector.add(
+                scope_level=ScopeLevel.PIXEL_REGION,
+                scope_uid=sop_instance_uid,
+                action_type=ActionType.RETAINED,
+                target_type=TargetType.PIXEL_REGION,
+                target_name=f"PixelRegion[{idx}]",
+                reason_code=ReasonCode.USER_OVERRIDE_RETAIN,
+                rule_source=RuleSource.USER_MASK_INPUT,
+                region_x=region.x,
+                region_y=region.y,
+                region_w=region.w,
+                region_h=region.h
+            )
+            count += 1
+    
+    return count
+

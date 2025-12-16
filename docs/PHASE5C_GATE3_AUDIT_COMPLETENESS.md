@@ -1,6 +1,6 @@
 # Gate 3 — Audit Completeness
 
-**Design Phase (No Execution)**
+**Status:** EXECUTABLE — Verification method defined
 
 ---
 
@@ -10,10 +10,11 @@
 | ---------------- | ------------------------------------------ |
 | Gate             | 3                                          |
 | Phase            | 5c                                         |
-| Status           | Design Complete                            |
+| Status           | **Executable** (verification method bound) |
 | Author           | VoxelMask Governance                       |
 | Created          | 2025-12-16                                 |
-| Execution Auth   | Blocked until Phase 5c design triad closes |
+| Updated          | 2025-12-16                                 |
+| Execution Auth   | Unlocked — schema + tests in place         |
 
 ---
 
@@ -28,7 +29,40 @@ It **constrains and formalises** what must already be produced by Gates 1 and 2.
 
 ---
 
-## 2. Core Design Principle
+## 2. Gate 3 Verification Method (Normative)
+
+**Gate 3 SHALL be evaluated by validating a produced Evidence Bundle against:**
+
+| Reference | Purpose | Location |
+|-----------|---------|----------|
+| Schema Contract | Defines required structure, files, and formats | `docs/PHASE5C_GATE2_EVIDENCE_BUNDLE_SCHEMA.md` |
+| Reference Validator | Executable test suite | `tests/test_gate3_bundle_schema.py` |
+
+### 2.1 Gate 3 Pass/Fail Rule
+
+**Gate 3 PASS requires ALL of the following:**
+
+| Requirement | Validation |
+|-------------|------------|
+| Evidence bundle schema validation passes | All required structure/files/hashes present |
+| Model B constraints are satisfied | No stored pixels, no recovered PHI text |
+| Audit completeness checks pass | Coverage/decision/linkage/config completeness |
+| All hash integrity checks pass | Every file validates against its `.sha256` |
+
+**Gate 3 FAIL if ANY of the above fail.** Processing output may exist, but attestation/export is blocked.
+
+### 2.2 Verification Execution
+
+```bash
+# Execute Gate 3 verification against a produced bundle
+pytest tests/test_gate3_bundle_schema.py -v --bundle-path=<EVIDENCE_BUNDLE_DIR>
+```
+
+Or programmatically via the validation functions in `src/audit/evidence_bundle.py`.
+
+---
+
+## 3. Core Design Principle
 
 ### Audit Completeness ≠ Maximal Logging
 
@@ -88,56 +122,70 @@ If *any* of these fail → the job is **audit-incomplete**, even if masking "wor
 
 ---
 
-## 5. Gate 3 Completeness Dimensions
+## 6. Gate 3 Completeness Dimensions
 
-Gate 3 evaluates completeness across **six dimensions**:
+Gate 3 evaluates completeness across **six dimensions**, each mapped to executable tests:
 
-### 5.1 Coverage Completeness
+### 6.1 Coverage Completeness
 
-* All input instances appear in `gate2_object_record`
-* No "silent drops"
-* Count reconciliation:
-  * discovered vs processed vs output
+**Test Group:** `TestAuditCompleteness` in `test_gate3_bundle_schema.py`
 
-### 5.2 Decision Completeness
+| Check | Evidence Location | Test |
+|-------|-------------------|------|
+| All input instances appear in source index | `INPUT/source_index.json` | `test_coverage_completeness` |
+| No "silent drops" | `MANIFEST.json` counts | `test_coverage_completeness` |
+| Count reconciliation | `MANIFEST.json` vs `INPUT/*.csv` | `test_coverage_completeness` |
 
-* Every object has:
-  * `action_taken`
-  * ≥1 `reason_code`
-* "NO_CHANGE" is an explicit decision, not absence of data
+### 6.2 Decision Completeness
 
-### 5.3 Evidence Completeness
+**Test Group:** `TestAuditCompleteness` in `test_gate3_bundle_schema.py`
 
-* If `PIXEL_MASKED`:
-  * mask plan exists
-  * before/after hashes exist
+| Check | Evidence Location | Test |
+|-------|-------------------|------|
+| Every object has decision | `DECISIONS/decision_log.jsonl` | `test_decision_completeness` |
+| Reason recorded | `DECISIONS/masking_actions.jsonl` | `test_decision_completeness` |
+| "NO_CHANGE" is explicit | `DECISIONS/decision_log.jsonl` | `test_decision_completeness` |
 
-* If `METADATA_ONLY`:
-  * header diff evidence exists
+### 6.3 Evidence Completeness
 
-* If `SKIPPED` or `FAILED`:
-  * rationale and error context recorded
+**Test Group:** `TestModelBConstraints` + `TestAuditCompleteness` in `test_gate3_bundle_schema.py`
 
-### 5.4 Configuration Completeness
+| Check | Evidence Location | Test |
+|-------|-------------------|------|
+| `PIXEL_MASKED`: action exists | `DECISIONS/masking_actions.jsonl` | `test_decision_completeness` |
+| `PIXEL_MASKED`: hashes exist | `INPUT/source_hashes.csv` | `test_source_hashes_present` |
+| Linkage recorded | `LINKAGE/instance_linkage.csv` | `test_linkage_completeness` |
+| Exceptions logged | `QA/exceptions.jsonl` | Schema validation |
 
-* Immutable config snapshot captured
-* Algorithm versions recorded
-* Thresholds and rules frozen per run
+### 6.4 Configuration Completeness
 
-### 5.5 Integrity Completeness
+**Test Group:** `TestAuditCompleteness` in `test_gate3_bundle_schema.py`
 
-* Hashes present for:
-  * datasets
-  * pixel data (if touched)
-  * evidence blobs
-* Manifest-level signing present
-* No unsigned artefact paths
+| Check | Evidence Location | Test |
+|-------|-------------------|------|
+| Config snapshot exists | `CONFIG/profile.json` | `test_config_completeness` |
+| Algorithm version recorded | `CONFIG/app_build.json` | `test_config_completeness` |
+| Thresholds frozen | `CONFIG/profile.json` | `test_config_completeness` |
 
-### 5.6 Retention Completeness
+### 6.5 Integrity Completeness
 
-* Retention policy declared
-* Purge date computable
-* PHI-containing artefacts flagged (ideally zero)
+**Test Group:** `TestHashIntegrity` + `TestBundleTree` in `test_gate3_bundle_schema.py`
+
+| Check | Evidence Location | Test |
+|-------|-------------------|------|
+| All artefacts have SHA-256 hashes | `*.sha256` companion files | `test_all_file_hashes_valid` |
+| Manifest hash validates | `MANIFEST.json.sha256` | `test_manifest_hash_valid` |
+| Bundle tree sorted and valid | `SIGNATURE/bundle_tree.txt` | `test_bundle_tree_sorted` |
+
+### 6.6 Retention Completeness
+
+**Test Group:** `TestManifestValidation` in `test_gate3_bundle_schema.py`
+
+| Check | Evidence Location | Test |
+|-------|-------------------|------|
+| Retention policy declared | `CONFIG/profile.json` | `test_config_completeness` |
+| Model B constraints enforced | `MANIFEST.json` constraints | `test_manifest_constraints_model_b` |
+| No PHI stored | Detection results | `test_detection_results_no_phi_text` |
 
 ---
 
@@ -298,18 +346,20 @@ For implementation, Gate 3 validation must check:
 
 ---
 
-## 11. Artefact Inventory (Gate 3 Scope)
+## 12. Artefact Inventory (Gate 3 Scope)
 
-Gate 3 does not create artefacts but validates the following exist and are complete:
+Gate 3 validates the **Model B Evidence Bundle** structure defined in `PHASE5C_GATE2_EVIDENCE_BUNDLE_SCHEMA.md`:
 
-| Artefact                      | Source Gate | Validated By Gate 3           |
-| ----------------------------- | ----------- | ----------------------------- |
-| `gate1_series_manifest.json`  | Gate 1      | Coverage, Integrity           |
-| `gate2_object_record.json`    | Gate 2      | Coverage, Decision, Evidence  |
-| `config_snapshot.json`        | Runtime     | Configuration                 |
-| Mask plans                    | Processing  | Evidence                      |
-| Hash records                  | Gate 2      | Integrity                     |
-| Retention policy              | Config      | Retention                     |
+| Directory | Contents | Validated |
+|-----------|----------|----------|
+| `CONFIG/` | `profile.json`, `app_build.json`, `runtime_env.json` | Configuration completeness |
+| `INPUT/` | `source_index.json`, `source_hashes.csv` | Coverage, Evidence |
+| `OUTPUT/` | `masked_index.json`, `masked_hashes.csv` | Coverage |
+| `DECISIONS/` | `detection_results.jsonl`, `masking_actions.jsonl`, `decision_log.jsonl` | Decision, Evidence |
+| `LINKAGE/` | `instance_linkage.csv` | Coverage, Evidence |
+| `QA/` | `exceptions.jsonl`, `verification_report.json` | Coverage, Integrity |
+| `SIGNATURE/` | `bundle_tree.txt` | Integrity |
+| Root | `MANIFEST.json` | All dimensions |
 
 ---
 
@@ -329,17 +379,26 @@ Gate 3 does not create artefacts but validates the following exist and are compl
 
 ---
 
-## 13. Design Triad Completion Status
+## 14. Gate Triad Execution Status
 
-With this document, the Phase 5c design triad is **complete**:
+Phase 5c governance gates:
 
-| Gate   | Document                                      | Status          |
-| ------ | --------------------------------------------- | --------------- |
-| Gate 1 | `PHASE5C_GATE1_SERIES_ORDER_PRESERVATION.md`  | ✅ Complete     |
-| Gate 2 | `PHASE5C_GATE2_SOURCE_RECOVERABILITY.md`      | ✅ Complete     |
-| Gate 3 | `PHASE5C_GATE3_AUDIT_COMPLETENESS.md`         | ✅ Complete     |
+| Gate   | Document                                      | Design | Execution |
+| ------ | --------------------------------------------- | ------ | --------- |
+| Gate 1 | `PHASE5C_GATE1_SERIES_ORDER_PRESERVATION.md`  | ✅     | ✅ PASSED |
+| Gate 2 | `PHASE5C_GATE2_DECISION_RECORD.md`            | ✅     | ✅ Model B Accepted |
+| Gate 3 | `PHASE5C_GATE3_AUDIT_COMPLETENESS.md`         | ✅     | ⏳ Verification method bound |
 
-**Execution of Phase 5c implementation is now formally unlocked.**
+**Gate 3 execution:** Run `pytest tests/test_gate3_bundle_schema.py -v` against any produced evidence bundle.
+
+### Supporting Artefacts
+
+| Artefact | Purpose |
+|----------|--------|
+| `PHASE5C_GATE2_EVIDENCE_BUNDLE_SCHEMA.md` | On-disk bundle schema |
+| `PHASE5C_GATE2_ARTIFACT_CHECKLIST.md` | Evidence requirements |
+| `src/audit/evidence_bundle.py` | Bundle generator |
+| `tests/test_gate3_bundle_schema.py` | 21 validation tests |
 
 ---
 

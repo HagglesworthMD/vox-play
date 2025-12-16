@@ -31,6 +31,15 @@ from pixel_invariant import (
     sha256_bytes,
 )
 
+# Evidence bundle import (Gate 2/3 Model B compliance)
+try:
+    from audit.evidence_bundle import EvidenceBundle, SCHEMA_VERSION
+    EVIDENCE_BUNDLE_AVAILABLE = True
+except ImportError:
+    EVIDENCE_BUNDLE_AVAILABLE = False
+    EvidenceBundle = None
+    SCHEMA_VERSION = None
+
 
 # Namespace UUID for deterministic UID generation (random but fixed)
 DEID_NAMESPACE = uuid.UUID('a1b2c3d4-e5f6-7890-abcd-ef1234567890')
@@ -728,7 +737,8 @@ def process_dicom(  # pragma: no cover
     manual_box: tuple = None,
     research_context: dict = None,
     mask_list: list = None,
-    clinical_context: dict = None
+    clinical_context: dict = None,
+    evidence_bundle: 'EvidenceBundle' = None,
 ) -> bool:
     """
     Process a DICOM file to de-identify patient information.
@@ -750,11 +760,31 @@ def process_dicom(  # pragma: no cover
         True if processing succeeded, False otherwise
     """
     print(f"Loading DICOM file: {input_path}")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # EVIDENCE BUNDLE: Early exception handler wrapper
+    # ═══════════════════════════════════════════════════════════════════════════
+    source_sop_uid = None
+    source_pixel_hash = None
 
     # Load the DICOM file (force=True handles files without standard header)
     try:
         ds = pydicom.dcmread(input_path, force=True)
+        # EVIDENCE: Extract source UIDs immediately
+        source_sop_uid = str(getattr(ds, 'SOPInstanceUID', 'UNKNOWN'))
+        source_series_uid = str(getattr(ds, 'SeriesInstanceUID', 'UNKNOWN'))
+        source_study_uid = str(getattr(ds, 'StudyInstanceUID', 'UNKNOWN'))
     except Exception as e:
+        if evidence_bundle:
+            try:
+                evidence_bundle.add_exception(
+                    exception_type="SOURCE_READ_FAILURE",
+                    message=str(e),
+                    severity="ERROR",
+                    source_sop_uid=None
+                )
+            except:
+                pass
         raise RuntimeError(f"Failed to read DICOM file: {e}")
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -793,7 +823,29 @@ def process_dicom(  # pragma: no cover
     # Get pixel array
     try:
         arr = ds.pixel_array.copy()  # Copy to ensure writability
+        # EVIDENCE: Compute source pixel hash BEFORE any modification (Model B backbone)
+        if evidence_bundle:
+            try:
+                source_pixel_hash = sha256_bytes(ds.PixelData)
+                evidence_bundle.add_source_hash(
+                    sop_instance_uid=source_sop_uid,
+                    pixel_hash=f"sha256:{source_pixel_hash}",
+                    series_uid=source_series_uid,
+                    instance_number=getattr(ds, 'InstanceNumber', None)
+                )
+            except Exception as he:
+                print(f"[EVIDENCE] Warning: Could not compute source hash: {he}")
     except Exception as e:
+        if evidence_bundle:
+            try:
+                evidence_bundle.add_exception(
+                    exception_type="PIXEL_ARRAY_FAILURE",
+                    message=str(e),
+                    severity="ERROR",
+                    source_sop_uid=source_sop_uid
+                )
+            except:
+                pass
         raise RuntimeError(f"Failed to extract pixel array: {e}")
 
     print(f"Original array shape: {arr.shape}, dtype: {arr.dtype}")
@@ -879,6 +931,27 @@ def process_dicom(  # pragma: no cover
         
         # Phase 4: Log detection strength
         print(f"[Phase4] Detection strength: {detection_result.detection_strength}, OCR failure: {detection_result.ocr_failure}")
+        
+        # EVIDENCE: Log detection results (NO PHI text stored - only locations/confidence)
+        if evidence_bundle and detection_result.all_detected_boxes:
+            try:
+                modality = str(getattr(ds, 'Modality', 'UNKNOWN'))
+                for i, box in enumerate(detection_result.all_detected_boxes):
+                    confidence = detection_result.confidence_scores[i] if i < len(detection_result.confidence_scores) else 0.0
+                    zone = detection_result.region_zones[i] if detection_result.region_zones and i < len(detection_result.region_zones) else "BODY"
+                    evidence_bundle.add_detection(
+                        source_sop_uid=source_sop_uid,
+                        bbox=list(box),
+                        confidence=confidence,
+                        region=zone,
+                        engine="PaddleOCR",
+                        engine_version="2.7.0",
+                        ruleset_id=f"{modality}_ZONE",
+                        config_hash="sha256:runtime",
+                        frame_index=None
+                    )
+            except Exception as de:
+                print(f"[EVIDENCE] Warning: Could not log detection: {de}")
 
         # Use default region if detection fails
         text_box = detection_result.static_box
@@ -932,6 +1005,22 @@ def process_dicom(  # pragma: no cover
     print(f"[PIXEL SCRUB] {len(all_masks)} BLACK BOX(es) applied to all frames")
     if arr_original_depth is not None:
         print(f"[ZERO-LOSS] Masks also applied to original {original_dtype} data")
+    
+    # EVIDENCE: Log masking actions (what was done, not what was found)
+    if evidence_bundle and all_masks:
+        try:
+            for mask_idx, (mx, my, mw, mh) in enumerate(all_masks):
+                evidence_bundle.add_masking_action(
+                    masked_sop_uid="PENDING",  # Will be updated after UID generation
+                    action_type="black_box",
+                    bbox_applied=[mx, my, mw, mh],
+                    parameters={"color": [0, 0, 0], "padding": 5},
+                    result="success",
+                    reason=None,
+                    frame_index=None
+                )
+        except Exception as me:
+            print(f"[EVIDENCE] Warning: Could not log masking action: {me}")
     
     # Use first mask for text overlay positioning (if any masks exist)
     if all_masks:
@@ -1180,7 +1269,55 @@ def process_dicom(  # pragma: no cover
     try:
         ds.save_as(output_path)
     except Exception as e:
+        if evidence_bundle:
+            try:
+                evidence_bundle.add_exception(
+                    exception_type="SAVE_FAILURE",
+                    message=str(e),
+                    severity="ERROR",
+                    source_sop_uid=source_sop_uid
+                )
+            except:
+                pass
         raise RuntimeError(f"Failed to save DICOM file: {e}")
+    
+    # EVIDENCE: Record linkage (source -> masked) and decision
+    if evidence_bundle:
+        try:
+            # Get the NEW UIDs after remapping
+            masked_sop_uid = str(getattr(ds, 'SOPInstanceUID', 'UNKNOWN'))
+            masked_series_uid = str(getattr(ds, 'SeriesInstanceUID', 'UNKNOWN'))
+            masked_study_uid = str(getattr(ds, 'StudyInstanceUID', 'UNKNOWN'))
+            
+            # Record linkage
+            evidence_bundle.add_linkage(
+                source_study_uid=source_study_uid,
+                source_series_uid=source_series_uid,
+                source_sop_uid=source_sop_uid,
+                masked_study_uid=masked_study_uid,
+                masked_series_uid=masked_series_uid,
+                masked_sop_uid=masked_sop_uid,
+                uid_strategy="REGENERATE_DETERMINISTIC"
+            )
+            
+            # Record decision
+            evidence_bundle.add_decision(
+                decision_type="MASK" if all_masks else "SKIP",
+                source_sop_uid=source_sop_uid,
+                masked_sop_uid=masked_sop_uid,
+                detections_count=len(evidence_bundle.detection_results),
+                actions_count=len(all_masks),
+                status="complete"
+            )
+            
+            # Record masked output hash
+            evidence_bundle.add_masked_hash(
+                sop_instance_uid=masked_sop_uid,
+                pixel_hash=f"sha256:{sha256_bytes(ds.PixelData)}",
+                series_uid=masked_series_uid
+            )
+        except Exception as le:
+            print(f"[EVIDENCE] Warning: Could not log linkage/decision: {le}")
 
     print("Processing complete!")
     return True
@@ -1195,6 +1332,9 @@ def main():  # pragma: no cover
 Examples:
     python src/run_on_dicom.py --input scan.dcm --output fixed.dcm --old "SMITH" --new "JONES"
     python src/run_on_dicom.py -i patient.dcm -o anonymized.dcm --old "DOE, JOHN" --new "ANON001"
+    
+    # With evidence bundle (Gate 2/3 Model B compliance):
+    python src/run_on_dicom.py -i scan.dcm -o masked.dcm --old "X" --new "Y" --evidence-bundle-dir ./evidence
         """
     )
 
@@ -1218,16 +1358,63 @@ Examples:
         required=True,
         help="New patient name to apply"
     )
+    parser.add_argument(
+        "--evidence-bundle-dir",
+        default=None,
+        help="Optional: Directory to write evidence bundle (Gate 2/3 Model B compliance)"
+    )
 
     args = parser.parse_args()
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # EVIDENCE BUNDLE LIFECYCLE
+    # ═══════════════════════════════════════════════════════════════════════════
+    evidence_bundle = None
+    if args.evidence_bundle_dir and EVIDENCE_BUNDLE_AVAILABLE:
+        from pathlib import Path
+        import platform
+        import sys as _sys
+        
+        print(f"[EVIDENCE] Creating evidence bundle in: {args.evidence_bundle_dir}")
+        evidence_bundle = EvidenceBundle(
+            voxelmask_version="0.5.0",
+            compliance_profile="FOI"
+        )
+        evidence_bundle.start_processing()
+        
+        # Set app build info
+        evidence_bundle.set_app_build(
+            version="0.5.0",
+            git_commit="unknown",
+            ocr_engine="PaddleOCR",
+            ocr_version="2.7.0"
+        )
+        evidence_bundle.set_runtime_env(
+            python_version=f"{_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}",
+            platform=platform.platform()
+        )
+    elif args.evidence_bundle_dir and not EVIDENCE_BUNDLE_AVAILABLE:
+        print("[EVIDENCE] Warning: Evidence bundle requested but audit module not available")
 
     try:
         success = process_dicom(
             input_path=args.input,
             output_path=args.output,
             old_name_text=args.old,
-            new_name_text=args.new
+            new_name_text=args.new,
+            evidence_bundle=evidence_bundle
         )
+        
+        # Finalize evidence bundle on success
+        if evidence_bundle and success:
+            try:
+                from pathlib import Path
+                evidence_bundle.end_processing()
+                bundle_path = evidence_bundle.finalize(Path(args.evidence_bundle_dir))
+                print(f"[EVIDENCE] Bundle written to: {bundle_path}")
+            except Exception as fe:
+                print(f"[EVIDENCE] Warning: Failed to finalize bundle: {fe}")
+        
         if success:
             print(f"\nSuccess! De-identified DICOM saved to: {args.output}")
             sys.exit(0)
@@ -1235,6 +1422,21 @@ Examples:
             print("\nProcessing failed.")
             sys.exit(1)
     except Exception as e:
+        # Attempt to finalize evidence bundle even on failure
+        if evidence_bundle:
+            try:
+                from pathlib import Path
+                evidence_bundle.add_exception(
+                    exception_type="PROCESSING_FAILURE",
+                    message=str(e),
+                    severity="ERROR"
+                )
+                evidence_bundle.end_processing()
+                bundle_path = evidence_bundle.finalize(Path(args.evidence_bundle_dir))
+                print(f"[EVIDENCE] Failure bundle written to: {bundle_path}")
+            except Exception as fe:
+                print(f"[EVIDENCE] Warning: Failed to write failure bundle: {fe}")
+        
         print(f"\nError: {e}")
         sys.exit(1)
 

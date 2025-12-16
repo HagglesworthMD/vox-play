@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import sys
 import uuid
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -380,13 +381,82 @@ def process_dataset(
     return ds
 
 
+@dataclass
+class DetectionResult:
+    """
+    Result of OCR text detection on an image array.
+    
+    Phase 4: Surfaces OCR confidence and failure states explicitly.
+    Detection-only — no masking or pixel behavior changes.
+    
+    Attributes:
+        static_box: Bounding box (x, y, w, h) of consistent text region, or None
+        all_detected_boxes: List of all detected boxes across sampled frames
+        detection_strength: LOW/MEDIUM/HIGH based on OCR confidence, or None if OCR failed
+        ocr_failure: True if OCR engine threw an exception
+        confidence_scores: Raw confidence scores for audit (may be empty)
+    """
+    static_box: tuple  # (x, y, w, h) or None
+    all_detected_boxes: list  # List of (x, y, w, h)
+    detection_strength: str  # "LOW", "MEDIUM", "HIGH", or None
+    ocr_failure: bool  # True if OCR engine failed
+    confidence_scores: list  # Raw scores for audit trail
+
+
+def _map_confidence_to_strength(confidence: float) -> str:
+    """
+    Map OCR confidence score (0.0-1.0) to detection strength.
+    
+    Uses conservative thresholds — intentionally pessimistic.
+    
+    Thresholds:
+        >= 0.80 → HIGH
+        0.50-0.79 → MEDIUM  
+        < 0.50 → LOW
+    
+    These thresholds are documented and tunable in future versions.
+    
+    Args:
+        confidence: OCR confidence score (0.0-1.0)
+        
+    Returns:
+        DetectionStrength value (LOW, MEDIUM, HIGH)
+    """
+    if confidence >= 0.80:
+        return "HIGH"
+    elif confidence >= 0.50:
+        return "MEDIUM"
+    else:
+        return "LOW"
+
+
+def _aggregate_confidence(scores: list) -> float:
+    """
+    Aggregate multiple confidence scores into a single value.
+    
+    Uses minimum (most conservative) to avoid false reassurance.
+    
+    Args:
+        scores: List of confidence scores (0.0-1.0)
+        
+    Returns:
+        Aggregated confidence score, or 0.0 if empty
+    """
+    if not scores:
+        return 0.0
+    return min(scores)
+
+
 def detect_text_box_from_array(
     corrector: ClinicalCorrector,
     arr: np.ndarray,
     debug_frame: np.ndarray = None
-) -> tuple:
+) -> DetectionResult:
     """
     Detect static text region from a numpy array (first frame).
+    
+    Phase 4 Enhancement: Returns DetectionResult with explicit confidence
+    and failure state. Detection-only — no masking behavior changes.
 
     Args:
         corrector: ClinicalCorrector instance
@@ -394,7 +464,12 @@ def detect_text_box_from_array(
         debug_frame: If provided, will be modified with red detection boxes
 
     Returns:
-        Bounding box tuple (x, y, w, h) and list of all detected boxes
+        DetectionResult containing:
+        - static_box: (x, y, w, h) or None
+        - all_detected_boxes: list of all detected boxes
+        - detection_strength: LOW/MEDIUM/HIGH or None if OCR failed
+        - ocr_failure: True if OCR engine threw exception
+        - confidence_scores: raw scores for audit
     """
     # Sample first and last frames for detection
     num_frames = arr.shape[0]
@@ -407,6 +482,8 @@ def detect_text_box_from_array(
 
     all_boxes = []
     all_detected_boxes = []  # For debug output
+    all_confidence_scores = []  # Phase 4: collect confidence
+    ocr_failure_occurred = False  # Phase 4: track failures
 
     for idx in sample_indices:
         frame = arr[idx]
@@ -429,7 +506,9 @@ def detect_text_box_from_array(
             if result and isinstance(result, list) and len(result) > 0:
                 res = result[0]
                 if isinstance(res, dict) and 'det_boxes' in res:
-                    for box_points in res['det_boxes']:
+                    # Dict format: {'det_boxes': [...], 'det_scores': [...]}
+                    det_scores = res.get('det_scores', [])
+                    for i, box_points in enumerate(res['det_boxes']):
                         x_coords = [p[0] for p in box_points]
                         y_coords = [p[1] for p in box_points]
                         # Scale back to original size
@@ -439,7 +518,11 @@ def detect_text_box_from_array(
                         h = int((max(y_coords) - min(y_coords)) / scale_factor)
                         frame_boxes.append((x, y, w, h))
                         all_detected_boxes.append((x, y, w, h))
+                        # Extract confidence if available
+                        if i < len(det_scores):
+                            all_confidence_scores.append(float(det_scores[i]))
                 elif isinstance(res, list):
+                    # List format: [[[box_points], (text, confidence)], ...]
                     for line in res:
                         box_points = line[0]
                         x_coords = [p[0] for p in box_points]
@@ -451,17 +534,47 @@ def detect_text_box_from_array(
                         h = int((max(y_coords) - min(y_coords)) / scale_factor)
                         frame_boxes.append((x, y, w, h))
                         all_detected_boxes.append((x, y, w, h))
+                        # Extract confidence from (text, confidence) tuple
+                        if len(line) > 1 and isinstance(line[1], (tuple, list)) and len(line[1]) > 1:
+                            all_confidence_scores.append(float(line[1][1]))
 
             all_boxes.append(frame_boxes)
         except Exception as e:
             print(f"OCR error on frame {idx}: {e}")
             all_boxes.append([])
+            ocr_failure_occurred = True  # Phase 4: explicit failure tracking
 
     print(f"Total boxes detected across all frames: {len(all_detected_boxes)}")
 
+    # Phase 4: Compute detection strength from confidence
+    if ocr_failure_occurred:
+        # OCR engine failed — explicit uncertainty
+        detection_strength = None
+        print("[Phase4] OCR failure detected — detection_strength=None (explicit uncertainty)")
+    elif not all_detected_boxes:
+        # No detections, but OCR didn't fail — LOW confidence
+        detection_strength = "LOW"
+        print("[Phase4] No text detected — detection_strength=LOW")
+    elif all_confidence_scores:
+        # Have confidence scores — compute strength from minimum (conservative)
+        aggregated = _aggregate_confidence(all_confidence_scores)
+        detection_strength = _map_confidence_to_strength(aggregated)
+        print(f"[Phase4] Confidence scores: min={aggregated:.3f} → detection_strength={detection_strength}")
+    else:
+        # OCR succeeded but no confidence scores available (legacy format)
+        # Default to MEDIUM — not confident enough for HIGH, not failing
+        detection_strength = "MEDIUM"
+        print("[Phase4] OCR succeeded but no confidence scores — detection_strength=MEDIUM (conservative default)")
+
     # Find consistent (static) boxes
     if not all_boxes or not all_boxes[0]:
-        return None, all_detected_boxes
+        return DetectionResult(
+            static_box=None,
+            all_detected_boxes=all_detected_boxes,
+            detection_strength=detection_strength,
+            ocr_failure=ocr_failure_occurred,
+            confidence_scores=all_confidence_scores,
+        )
 
     reference_boxes = all_boxes[0]
     static_box = None
@@ -480,9 +593,21 @@ def detect_text_box_from_array(
             static_box = ref_box
 
     if max_consistency >= len(all_boxes) // 2:
-        return static_box, all_detected_boxes
+        return DetectionResult(
+            static_box=static_box,
+            all_detected_boxes=all_detected_boxes,
+            detection_strength=detection_strength,
+            ocr_failure=ocr_failure_occurred,
+            confidence_scores=all_confidence_scores,
+        )
 
-    return None, all_detected_boxes
+    return DetectionResult(
+        static_box=None,
+        all_detected_boxes=all_detected_boxes,
+        detection_strength=detection_strength,
+        ocr_failure=ocr_failure_occurred,
+        confidence_scores=all_confidence_scores,
+    )
 
 
 # NOTE: process_dicom is integration-heavy (I/O + pixel pipeline)
@@ -633,18 +758,22 @@ def process_dicom(  # pragma: no cover
     else:
         # AI Detection fallback
         print("[MASK] No manual mask - running AI detection...")
-        text_box, all_detected_boxes = detect_text_box_from_array(corrector, arr)
+        detection_result = detect_text_box_from_array(corrector, arr)
 
         # Save debug image with RED rectangles around all detections
         debug_frame = arr[0].copy()
-        for box in all_detected_boxes:
+        for box in detection_result.all_detected_boxes:
             bx, by, bw, bh = box
             cv2.rectangle(debug_frame, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)  # RED
         debug_path = "studies/debug_detection.png"
         cv2.imwrite(debug_path, cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR))
-        print(f"[MASK] Debug image saved to: {debug_path} (showing {len(all_detected_boxes)} detections)")
+        print(f"[MASK] Debug image saved to: {debug_path} (showing {len(detection_result.all_detected_boxes)} detections)")
+        
+        # Phase 4: Log detection strength
+        print(f"[Phase4] Detection strength: {detection_result.detection_strength}, OCR failure: {detection_result.ocr_failure}")
 
         # Use default region if detection fails
+        text_box = detection_result.static_box
         if text_box is None:
             print("[MASK] No text detected, using default top-left region")
             text_box = (10, 10, 200, 30)

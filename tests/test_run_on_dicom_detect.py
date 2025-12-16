@@ -199,16 +199,18 @@ def test_process_dataset_returns_ds_when_pixeldata_is_none(monkeypatch):
 # ----------------------------
 
 def test_detect_text_box_returns_tuple_for_empty_input():
-    """Empty array should return (None, []) or similar tuple."""
+    """Empty array should return DetectionResult with None static_box."""
     corrector = StubCorrector(boxes=[])
     corrector.ocr = StubOCR(det_boxes=[])
     arr = np.zeros((1, 64, 64, 3), dtype=np.uint8)  # 4D array as expected
     
     result = run_on_dicom.detect_text_box_from_array(corrector, arr)
     
-    # Function returns (static_box, all_detected_boxes)
-    assert isinstance(result, tuple)
-    assert len(result) == 2
+    # Phase 4: Function now returns DetectionResult
+    from run_on_dicom import DetectionResult
+    assert isinstance(result, DetectionResult)
+    assert result.static_box is None
+    assert isinstance(result.all_detected_boxes, list)
 
 
 def test_detect_text_box_returns_box_when_consistent_across_frames():
@@ -222,10 +224,10 @@ def test_detect_text_box_returns_box_when_consistent_across_frames():
     # 6 frames, 4D array
     arr = np.zeros((6, 64, 64, 3), dtype=np.uint8)
     
-    static_box, all_boxes = run_on_dicom.detect_text_box_from_array(corrector, arr)
+    result = run_on_dicom.detect_text_box_from_array(corrector, arr)
     
     # Should have detected boxes
-    assert len(all_boxes) > 0
+    assert len(result.all_detected_boxes) > 0
 
 
 def test_detect_text_box_handles_single_frame():
@@ -235,10 +237,12 @@ def test_detect_text_box_handles_single_frame():
     
     arr = np.zeros((1, 64, 64, 3), dtype=np.uint8)
     
-    static_box, all_boxes = run_on_dicom.detect_text_box_from_array(corrector, arr)
+    result = run_on_dicom.detect_text_box_from_array(corrector, arr)
     
-    # Should return tuple even with single frame
-    assert static_box is None or isinstance(static_box, tuple)
+    # Should return DetectionResult even with single frame
+    from run_on_dicom import DetectionResult
+    assert isinstance(result, DetectionResult)
+    assert result.static_box is None or isinstance(result.static_box, tuple)
 
 
 def test_detect_text_box_handles_grayscale_frames():
@@ -251,13 +255,13 @@ def test_detect_text_box_handles_grayscale_frames():
     # Add channel dimension
     arr = arr[:, :, :, np.newaxis]
     
-    static_box, all_boxes = run_on_dicom.detect_text_box_from_array(corrector, arr)
+    result = run_on_dicom.detect_text_box_from_array(corrector, arr)
     
-    assert isinstance(all_boxes, list)
+    assert isinstance(result.all_detected_boxes, list)
 
 
 def test_detect_text_box_handles_ocr_exception(capsys):
-    """OCR exception should be caught and logged."""
+    """OCR exception should be caught and logged, with explicit uncertainty."""
     corrector = StubCorrector(boxes=[])
     
     # Create OCR that raises exception
@@ -269,10 +273,13 @@ def test_detect_text_box_handles_ocr_exception(capsys):
     
     arr = np.zeros((2, 64, 64, 3), dtype=np.uint8)
     
-    static_box, all_boxes = run_on_dicom.detect_text_box_from_array(corrector, arr)
+    result = run_on_dicom.detect_text_box_from_array(corrector, arr)
     
     captured = capsys.readouterr()
     assert "OCR error" in captured.out
+    # Phase 4: OCR failure should result in explicit uncertainty
+    assert result.ocr_failure is True
+    assert result.detection_strength is None
 
 
 def test_detect_text_box_accepts_debug_frame_argument():
@@ -285,7 +292,8 @@ def test_detect_text_box_accepts_debug_frame_argument():
 
     # Should not raise
     result = run_on_dicom.detect_text_box_from_array(corrector, arr, debug_frame=debug)
-    assert isinstance(result, tuple)
+    from run_on_dicom import DetectionResult
+    assert isinstance(result, DetectionResult)
 
 
 def test_detect_text_box_handles_list_format_ocr_result():
@@ -303,10 +311,10 @@ def test_detect_text_box_handles_list_format_ocr_result():
     
     arr = np.zeros((2, 64, 64, 3), dtype=np.uint8)
     
-    static_box, all_boxes = run_on_dicom.detect_text_box_from_array(corrector, arr)
+    result = run_on_dicom.detect_text_box_from_array(corrector, arr)
     
     # Should handle list format without error
-    assert isinstance(all_boxes, list)
+    assert isinstance(result.all_detected_boxes, list)
 
 
 # ----------------------------

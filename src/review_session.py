@@ -755,3 +755,62 @@ def preflight_scan_datasets(
             findings.append(finding)
     return findings
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 4: DETECTION RESULT → REVIEW SESSION BRIDGE
+# Wires OCR detection strength into review workflow
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def populate_regions_from_detection(
+    session: ReviewSession,
+    detection_result,  # DetectionResult from run_on_dicom (not typed to avoid circular import)
+    frame_index: int = -1,
+) -> int:
+    """
+    Populate ReviewSession with detected regions from OCR output.
+    
+    Phase 4: Wires detection_strength from OCR engine to review regions.
+    This is a plumbing function — no behavior change, purely data flow.
+    
+    Args:
+        session: ReviewSession to populate
+        detection_result: DetectionResult from detect_text_box_from_array()
+        frame_index: Frame index for regions (-1 = all frames)
+        
+    Returns:
+        Number of regions added
+        
+    Example:
+        >>> from run_on_dicom import detect_text_box_from_array, DetectionResult
+        >>> from review_session import ReviewSession, populate_regions_from_detection
+        >>> 
+        >>> result = detect_text_box_from_array(corrector, arr)
+        >>> session = ReviewSession.create(sop_instance_uid="1.2.3")
+        >>> count = populate_regions_from_detection(session, result)
+        >>> print(f"Added {count} regions with strength={result.detection_strength}")
+    """
+    if session.is_sealed():
+        return 0
+    
+    # Extract detection strength from result
+    # None = OCR failure (explicit uncertainty)
+    detection_strength = getattr(detection_result, 'detection_strength', None)
+    
+    # Get all detected boxes
+    all_boxes = getattr(detection_result, 'all_detected_boxes', [])
+    
+    count = 0
+    for box in all_boxes:
+        if len(box) == 4:
+            x, y, w, h = box
+            session.add_ocr_region(
+                x=int(x),
+                y=int(y),
+                w=int(w),
+                h=int(h),
+                detection_strength=detection_strength,
+                frame_index=frame_index,
+            )
+            count += 1
+    
+    return count

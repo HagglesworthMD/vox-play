@@ -297,3 +297,139 @@ class TestPhase4GovernanceCompliance:
         for conf in [0.0, 0.25, 0.49, 0.50, 0.65, 0.79, 0.80, 0.95, 1.0]:
             result = _map_confidence_to_strength(conf)
             assert result in valid_outputs, f"Unexpected strength '{result}' for confidence {conf}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 4: DETECTION → REVIEW SESSION BRIDGE TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPopulateRegionsFromDetection:
+    """Tests for populate_regions_from_detection bridge function."""
+    
+    def test_bridges_detection_strength_to_regions(self):
+        """detection_strength should flow from DetectionResult to ReviewRegion."""
+        from run_on_dicom import DetectionResult
+        from review_session import ReviewSession, populate_regions_from_detection
+        
+        # Create detection result with HIGH strength
+        detection_result = DetectionResult(
+            static_box=(10, 20, 100, 50),
+            all_detected_boxes=[(10, 20, 100, 50)],
+            detection_strength="HIGH",
+            ocr_failure=False,
+            confidence_scores=[0.95],
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        count = populate_regions_from_detection(session, detection_result)
+        
+        assert count == 1
+        assert len(session.get_regions()) == 1
+        region = session.get_regions()[0]
+        assert region.detection_strength == "HIGH"
+    
+    def test_ocr_failure_surfaces_as_none_strength(self):
+        """OCR failure should result in detection_strength=None."""
+        from run_on_dicom import DetectionResult
+        from review_session import ReviewSession, populate_regions_from_detection
+        
+        # Create detection result with OCR failure
+        detection_result = DetectionResult(
+            static_box=None,
+            all_detected_boxes=[(10, 20, 100, 50)],  # Still have box from partial detection
+            detection_strength=None,  # OCR failed
+            ocr_failure=True,
+            confidence_scores=[],
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        count = populate_regions_from_detection(session, detection_result)
+        
+        assert count == 1
+        region = session.get_regions()[0]
+        assert region.detection_strength is None  # Explicit uncertainty
+    
+    def test_multiple_boxes_all_get_same_strength(self):
+        """All boxes from single detection should share the same strength."""
+        from run_on_dicom import DetectionResult
+        from review_session import ReviewSession, populate_regions_from_detection
+        
+        detection_result = DetectionResult(
+            static_box=(10, 20, 100, 50),
+            all_detected_boxes=[
+                (10, 20, 100, 50),
+                (200, 300, 80, 40),
+                (400, 500, 60, 30),
+            ],
+            detection_strength="MEDIUM",
+            ocr_failure=False,
+            confidence_scores=[0.65, 0.70, 0.75],
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        count = populate_regions_from_detection(session, detection_result)
+        
+        assert count == 3
+        for region in session.get_regions():
+            assert region.detection_strength == "MEDIUM"
+    
+    def test_empty_detection_adds_no_regions(self):
+        """Empty detection should add no regions."""
+        from run_on_dicom import DetectionResult
+        from review_session import ReviewSession, populate_regions_from_detection
+        
+        detection_result = DetectionResult(
+            static_box=None,
+            all_detected_boxes=[],
+            detection_strength="LOW",
+            ocr_failure=False,
+            confidence_scores=[],
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        count = populate_regions_from_detection(session, detection_result)
+        
+        assert count == 0
+        assert len(session.get_regions()) == 0
+    
+    def test_sealed_session_rejects_new_regions(self):
+        """Sealed session should not accept new regions."""
+        from run_on_dicom import DetectionResult
+        from review_session import ReviewSession, populate_regions_from_detection
+        
+        detection_result = DetectionResult(
+            static_box=(10, 20, 100, 50),
+            all_detected_boxes=[(10, 20, 100, 50)],
+            detection_strength="HIGH",
+            ocr_failure=False,
+            confidence_scores=[0.95],
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        session.start_review()
+        session.accept()  # Seal the session
+        
+        count = populate_regions_from_detection(session, detection_result)
+        
+        assert count == 0  # Should not add due to sealed session
+        assert len(session.get_regions()) == 0
+    
+    def test_frame_index_passed_through(self):
+        """frame_index should be passed to created regions."""
+        from run_on_dicom import DetectionResult
+        from review_session import ReviewSession, populate_regions_from_detection
+        
+        detection_result = DetectionResult(
+            static_box=(10, 20, 100, 50),
+            all_detected_boxes=[(10, 20, 100, 50)],
+            detection_strength="HIGH",
+            ocr_failure=False,
+            confidence_scores=[0.95],
+        )
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        populate_regions_from_detection(session, detection_result, frame_index=5)
+        
+        region = session.get_regions()[0]
+        assert region.frame_index == 5
+

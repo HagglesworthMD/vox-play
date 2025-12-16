@@ -14,14 +14,17 @@ import hashlib
 from pathlib import Path
 import pytest
 
-# Match existing project style
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Import from audit.py specifically (not the audit/ package)
+# Python prefers packages over modules when both exist, so we use importlib
+import importlib.util
+_audit_path = os.path.join(os.path.dirname(__file__), '..', 'src', 'audit.py')
+_spec = importlib.util.spec_from_file_location("audit_module", _audit_path)
+_audit = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_audit)
 
-from audit import (
-    extract_sonographer_initials,
-    calculate_file_hash,
-    generate_audit_receipt,
-)
+extract_sonographer_initials = _audit.extract_sonographer_initials
+calculate_file_hash = _audit.calculate_file_hash
+generate_audit_receipt = _audit.generate_audit_receipt
 
 
 class TestExtractSonographerInitials:
@@ -379,12 +382,13 @@ class TestModuleImports:
     """Tests for module-level checks."""
     
     def test_audit_module_imports(self):
-        """audit module should import successfully."""
-        import audit
-        assert audit is not None
+        """audit.py module should import successfully."""
+        # We already loaded it via importlib above as _audit
+        assert _audit is not None
     
     def test_functions_are_callable(self):
         """All public functions should be callable."""
         assert callable(extract_sonographer_initials)
         assert callable(calculate_file_hash)
         assert callable(generate_audit_receipt)
+

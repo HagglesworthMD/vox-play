@@ -54,6 +54,15 @@ st.markdown(
 )
 
 # ==============================================================================
+# BUILD FINGERPRINT (logged on startup, no UI impact)
+# ==============================================================================
+import logging, subprocess
+logging.info(
+    "VoxelMask build %s",
+    subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+)
+
+# ==============================================================================
 # AFTER THIS POINT:
 # - You may import other modules
 # - You may define helper functions
@@ -3282,7 +3291,66 @@ if st.session_state.get('uploaded_dicom_files'):
                             anonymizer = DicomAnonymizer(config)
                             result = anonymizer.anonymize_file(input_path, output_path)
                             success = result.success
+                        elif clinical_context and clinical_context.get('uid_only_mode', False):
+                            # ═══════════════════════════════════════════════════════════════════
+                            # UID-ONLY MODE: Metadata-only path (Phase 3 Pixel Invariant)
+                            # ═══════════════════════════════════════════════════════════════════
+                            # CRITICAL: This path ensures:
+                            #   - NO pixel decode
+                            #   - NO AI detection
+                            #   - NO overlay generation
+                            #   - NO black boxes
+                            #   - PixelData bytes are IDENTICAL to input
+                            #
+                            # Only UIDs (SOP/Series/Study Instance UIDs) are regenerated.
+                            # Patient data (name, ID, DOB, dates, accession) is PRESERVED.
+                            # ═══════════════════════════════════════════════════════════════════
+                            import pydicom
+                            from run_on_dicom import process_dataset
+                            from pixel_invariant import PixelAction, validate_uid_only_output, sha256_bytes
+                            
+                            # Read original dataset
+                            ds = pydicom.dcmread(input_path)
+                            
+                            # Capture baseline pixel hash for invariant check
+                            baseline_hash = None
+                            if hasattr(ds, 'PixelData') and ds.PixelData:
+                                baseline_hash = sha256_bytes(ds.PixelData)
+                            
+                            # Keep a reference to original PixelData (defensive copy not needed
+                            # since process_dataset won't modify it in uid_only_mode)
+                            original_pixel_data = ds.PixelData if hasattr(ds, 'PixelData') else None
+                            
+                            # Process metadata only (no pixel processing)
+                            audit_dict = {}
+                            process_dataset(
+                                ds,
+                                old_name_text=original_name,
+                                new_name_text="PRESERVED",  # Marker - actual patient name preserved
+                                clinical_context=clinical_context,
+                                audit_dict=audit_dict,
+                            )
+                            
+                            # PHASE 3 INVARIANT CHECK: Verify PixelData unchanged
+                            if baseline_hash is not None and hasattr(ds, 'PixelData') and ds.PixelData:
+                                current_hash = sha256_bytes(ds.PixelData)
+                                if current_hash != baseline_hash:
+                                    raise RuntimeError(
+                                        f"FATAL: UID-only mode pixel invariant violated! "
+                                        f"PixelData hash changed from {baseline_hash[:16]}... to {current_hash[:16]}... "
+                                        f"This should never happen. Aborting export."
+                                    )
+                            
+                            # Save with original Transfer Syntax preserved
+                            ds.save_as(output_path, write_like_original=True)
+                            success = True
+                            
+                            # Log the UID-only processing
+                            print(f"[UID-ONLY] Metadata-only processing complete for {os.path.basename(input_path)}")
+                            print(f"[UID-ONLY] pixel_action={audit_dict.get('pixel_action', 'N/A')}, "
+                                  f"pixel_invariant={audit_dict.get('pixel_invariant', 'N/A')}")
                         else:
+                            # Full pixel pipeline - ONLY when masking is actually requested
                             success = process_dicom(
                                 input_path=input_path,
                                 output_path=output_path,

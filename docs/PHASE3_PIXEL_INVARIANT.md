@@ -113,3 +113,59 @@ RuntimeError: Pixel invariant violated (UID-only clinical correction):
 PixelData hash changed from abc123... to def456... 
 This is forbidden in UID-only mode.
 ```
+
+---
+
+## Phase 3b: Root Cause Fix (app.py Dispatch)
+
+### Problem Discovered
+
+The original implementation called `process_dicom()` for **all** Clinical Correction modes,
+including UID-only mode. This caused:
+
+- AI detection to run (even when no masking requested)
+- Default mask region to be used if detection failed
+- Black boxes to be drawn
+- Overlay text to be generated and burned into pixels
+
+The Phase 3 invariant was correct, but UID-only mode never should have entered
+the pixel pipeline in the first place.
+
+### Fix Applied
+
+In `src/app.py`, a new dispatch branch was added **before** `process_dicom()`:
+
+```python
+elif clinical_context and clinical_context.get('uid_only_mode', False):
+    # UID-ONLY MODE: Metadata-only path (Phase 3 Pixel Invariant)
+    ds = pydicom.dcmread(input_path)
+    
+    # Capture baseline hash
+    baseline_hash = sha256_bytes(ds.PixelData)
+    
+    # Process metadata only
+    process_dataset(ds, old_name_text=..., clinical_context=clinical_context)
+    
+    # Verify invariant
+    if sha256_bytes(ds.PixelData) != baseline_hash:
+        raise RuntimeError("FATAL: Pixel invariant violated!")
+    
+    # Save with original Transfer Syntax preserved
+    ds.save_as(output_path, write_like_original=True)
+```
+
+### Guarantees Now Enforced
+
+| Guarantee | Status |
+|-----------|--------|
+| No pixel decode | ✅ |
+| No AI detection | ✅ |
+| No overlay generation | ✅ |
+| No black boxes | ✅ |
+| PixelData bytes identical | ✅ |
+| Transfer Syntax preserved | ✅ |
+
+### Pipeline Contract
+
+VoxelMask now has a **strict metadata-only execution path**.
+Pixel processing code is never invoked unless explicitly requested.

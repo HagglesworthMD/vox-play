@@ -15,7 +15,7 @@ import streamlit as st
 # HARD LOCK PAGE CONFIG
 # ------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="VoxelMask - Intelligent De-ID",
+    page_title="VoxelMask — Imaging De-Identification (Pilot Mode)",
     page_icon="🩺",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -129,7 +129,12 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_on_dicom import process_dicom
 from audit_manager import AuditLogger, embed_compliance_tags, AtomicScrubOperation
-from audit import generate_audit_receipt
+# Import from standalone audit.py module (not the audit/ package)
+import importlib.util
+_audit_spec = importlib.util.spec_from_file_location("audit_module", os.path.join(os.path.dirname(__file__), "audit.py"))
+_audit_module = importlib.util.module_from_spec(_audit_spec)
+_audit_spec.loader.exec_module(_audit_module)
+generate_audit_receipt = _audit_module.generate_audit_receipt
 from research_mode.anonymizer import DicomAnonymizer, AnonymizationConfig
 from interactive_canvas import draw_canvas_with_image
 from compliance_engine import DicomComplianceManager
@@ -1542,8 +1547,8 @@ def dicom_to_pil(dcm_path: str) -> tuple:
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
-st.title("VoxelMask")
-st.markdown("*Professional DICOM De-Identification for Clinical & Research Use*")
+st.title("VoxelMask — Imaging De-Identification (Pilot Mode)")
+st.markdown("**Evaluation build. Copy-out processing only. Not for clinical use.**")
 
 # Initialize variables (previously in sidebar)
 enable_manual_mask = True
@@ -1584,9 +1589,9 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         files_per_sec = stats.get('files_per_second', 0)
         mb_per_sec = stats.get('mb_per_second', 0)
         
-        # Get profile display name
+        # Get profile display name (Phase 6 governance-safe)
         profile_names = {
-            "internal_repair": "🔧 Clinical Correction",
+            "internal_repair": "🔧 Internal Repair",
             "us_research_safe_harbor": "🇺🇸 Safe Harbor",
             "au_strict_oaic": "🇦🇺 AU Strict",
             "foi_legal": "⚖️ FOI/Legal",
@@ -1748,11 +1753,11 @@ else:
     if 'gateway_profile' not in st.session_state:
         st.session_state.gateway_profile = "internal_repair"
     
-    st.markdown("### 🎯 Select Processing Profile")
-    st.caption("This determines what data you enter and how files are processed")
+    st.markdown("### Processing Configuration")
+    st.caption("Defines which metadata fields are modified and which image regions may be masked.")
     
     pacs_operation_mode = st.selectbox(
-        "**Operation Profile**",
+        "**De-Identification Profile**",
         options=[
             "internal_repair",
             "us_research_safe_harbor", 
@@ -1761,14 +1766,14 @@ else:
             "foi_patient"
         ],
         format_func=lambda x: {
-            "internal_repair": "🔧 Clinical Correction - Fix patient name/headers (Internal Use)",
-            "us_research_safe_harbor": "🇺🇸 US Research (HIPAA Safe Harbor) - Full de-identification",
+            "internal_repair": "🔧 Internal Repair - Metadata correction (evaluation only)",
+            "us_research_safe_harbor": "🇺🇸 US Research (Safe Harbor) - De-identification for research",
             "au_strict_oaic": "🇦🇺 AU Strict (OAIC APP11) - Hash IDs, shift dates",
             "foi_legal": "⚖️ FOI/Legal - Staff redacted, patient data preserved",
-            "foi_patient": "📋 FOI/Patient - Patient record release with cover letter"
+            "foi_patient": "📋 FOI/Patient - Patient record release"
         }.get(x, x),
         index=list(["internal_repair", "us_research_safe_harbor", "au_strict_oaic", "foi_legal", "foi_patient"]).index(st.session_state.gateway_profile),
-        help="Choose your use case. This determines what fields you need to fill in.",
+        help="Profiles reflect policy intent, not regulatory certification. Output is intended for research, audit, or evaluation workflows. Not validated for diagnostic or clinical decision-making.",
         key="gateway_profile_selector"
     )
     
@@ -1784,13 +1789,13 @@ else:
     # Store for session state compatibility
     st.session_state.processing_mode = mode
     
-    # Show profile summary
+    # Show profile summary (Phase 6 governance-safe language)
     profile_summaries = {
-        "internal_repair": ("✅", "success", "**Clinical Correction**: Enter new patient name. Dates/UIDs preserved. For PACS troubleshooting."),
-        "us_research_safe_harbor": ("🛡️", "info", "**Safe Harbor**: Removes 18 HIPAA identifiers. Enter Trial/Subject IDs. For US research."),
-        "au_strict_oaic": ("🔒", "warning", "**AU Strict**: Hashes PatientID, shifts dates. For Australian privacy compliance."),
-        "foi_legal": ("⚖️", "info", "**FOI/Legal**: Preserves patient data, redacts staff names. For legal discovery."),
-        "foi_patient": ("📋", "info", "**FOI/Patient**: Creates patient release with cover letter. For patient requests.")
+        "internal_repair": ("✅", "success", "**Internal Repair**: Metadata correction. Dates/UIDs preserved. For evaluation."),
+        "us_research_safe_harbor": ("🛡️", "info", "**Safe Harbor**: De-identification based on configured rules. For research workflows."),
+        "au_strict_oaic": ("🔒", "warning", "**AU Strict**: Hashes PatientID, shifts dates. Based on OAIC APP11 policy intent."),
+        "foi_legal": ("⚖️", "info", "**FOI/Legal**: Preserves patient data, redacts staff names. For disclosure workflows."),
+        "foi_patient": ("📋", "info", "**FOI/Patient**: Patient record release. For review and evaluation purposes.")
     }
     
     icon, style, text = profile_summaries.get(pacs_operation_mode, ("ℹ️", "info", "Select a profile"))
@@ -1806,8 +1811,6 @@ else:
     # ═══════════════════════════════════════════════════════════════════════════════
     # UNIFIED SMART INGEST - Single drop zone that handles everything
     # ═══════════════════════════════════════════════════════════════════════════════
-    st.markdown("### 📁 Select DICOM Files")
-    st.caption("Drop files here - supports single files, multiple files, or ZIP archives")
     
     # Large file disclaimer
     st.markdown("""
@@ -1826,8 +1829,11 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
+st.markdown("### Input Studies")
+st.caption("DICOM studies are processed in copy-out mode. Source data is not modified.")
+
 uploaded_files = st.file_uploader(
-    "**Upload DICOM Files**", 
+    "**Select DICOM Files**", 
     type=None, 
     accept_multiple_files=True,
     key="unified_upload"
@@ -4050,8 +4056,9 @@ Studies in this archive:
 # ═══════════════════════════════════════════════════════════════════════════════
 st.divider()
 st.markdown(
-    "<div style='text-align: center; color: #64748B; font-size: 0.85rem;'>"
-    "VoxelMask | DICOM De-Identification Engine"
+    "<div style='text-align: center; color: #64748B; font-size: 0.85rem; line-height: 1.6;'>"
+    "VoxelMask does not guarantee removal of all personal or identifying information.<br>"
+    "Users are responsible for validating outputs for their intended use."
     "</div>",
     unsafe_allow_html=True
 )

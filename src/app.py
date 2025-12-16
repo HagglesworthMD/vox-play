@@ -138,6 +138,7 @@ from foi_engine import FOIEngine, process_foi_request, exclude_scanned_documents
 from pdf_reporter import PDFReporter, create_report
 from review_session import ReviewSession, ReviewRegion, RegionSource, RegionAction, preflight_scan_dataset
 from decision_trace import DecisionTraceCollector, DecisionTraceWriter, record_region_decisions
+from phase5a_ui_semantics import RegionSemantics  # Phase 5A: Presentation-only UX semantics
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2439,6 +2440,18 @@ if st.session_state.get('uploaded_dicom_files'):
             # ═══════════════════════════════════════════════════════════════════
             # REGION LIST WITH TOGGLE BUTTONS (PR 4)
             # ═══════════════════════════════════════════════════════════════════
+            # ═══════════════════════════════════════════════════════════════════
+            # PHASE 5A: REVIEW UX SEMANTICS (PRESENTATION-ONLY)
+            # Status: Approved | Risk: Low | Behavioral Change: None
+            #
+            # Visual elements below are derived from Phase 4 data:
+            # - Detection Strength Badges: [ OCR: HIGH/MEDIUM/LOW/? ]
+            # - Spatial Zone Labels: Zone: HEADER/BODY/FOOTER
+            # - Uncertainty Tooltips: ℹ️ for LOW strength or OCR failure
+            #
+            # INVARIANT: If these visuals are disabled, system behavior is identical.
+            # Phase 5A introduces no new decision logic and does not alter review outcomes.
+            # ═══════════════════════════════════════════════════════════════════
             regions = review_session.get_active_regions()
             if regions:
                 st.markdown("**Region List:**")
@@ -2447,6 +2460,13 @@ if st.session_state.get('uploaded_dicom_files'):
                     source_icon = "🔍 OCR" if region.source == RegionSource.OCR else "✏️ Manual"
                     current_action = region.get_effective_action()
                     action_icon = "🔴 MASK" if current_action == RegionAction.MASK else "🟢 UNMASK"
+                    
+                    # Phase 5A: Generate presentation elements (no state mutation)
+                    semantics = RegionSemantics.from_region_attributes(
+                        detection_strength=region.detection_strength,
+                        region_zone=region.region_zone,
+                        source=region.source,
+                    )
                     
                     # Create row with info and toggle button
                     row_col1, row_col2, row_col3, row_col4 = st.columns([1, 2, 3, 2])
@@ -2472,6 +2492,21 @@ if st.session_state.get('uploaded_dicom_files'):
                                 if not review_session.review_started:
                                     review_session.start_review()
                                 st.rerun()
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # PHASE 5A: Detection Strength Badge + Zone Label + Uncertainty
+                    # Presentation-only: No buttons, no toggles, no action language
+                    # ═══════════════════════════════════════════════════════════════
+                    if region.source == RegionSource.OCR:
+                        # Combine all Phase 5A elements into a single metadata row
+                        phase5a_html = f"""
+                        <div style="margin-left: 12px; margin-top: 2px; font-size: 0.85em; color: #8b949e;">
+                            {semantics.strength_badge_html}
+                            {semantics.zone_label_html}
+                            {semantics.uncertainty_html}
+                        </div>
+                        """
+                        st.markdown(phase5a_html, unsafe_allow_html=True)
                     
                     # Delete button for manual regions (on separate row to avoid crowding)
                     if region.can_delete() and not review_session.is_sealed():

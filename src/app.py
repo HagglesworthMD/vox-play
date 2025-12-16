@@ -145,6 +145,7 @@ from review_session import ReviewSession, ReviewRegion, RegionSource, RegionActi
 from decision_trace import DecisionTraceCollector, DecisionTraceWriter, record_region_decisions
 from phase5a_ui_semantics import RegionSemantics  # Phase 5A: Presentation-only UX semantics
 from selection_scope import SelectionScope, ObjectCategory, classify_object, should_include_object, get_category_label, generate_scope_audit_block, generate_scope_json  # Phase 6: Explicit selection semantics
+from viewer_state import ViewerStudyState, build_viewer_state, ViewerOrderingMethod, SeriesOrderingMethod, get_instance_ordering_label, get_series_ordering_label  # Phase 6: Viewer UX
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2224,10 +2225,22 @@ if st.session_state.get('uploaded_dicom_files'):
     if 'us_shared_mask' not in st.session_state:
         st.session_state.us_shared_mask = None  # Shared mask for all US files
     
-    # Combine all files that need preview:
-    # - US files for shared masking
-    # - Document files (SC, OT, worksheets) for individual masking
-    preview_files = (bucket_us.copy() if bucket_us else []) + (bucket_docs.copy() if bucket_docs else [])
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 6: Preview respects selection scope
+    # 
+    # CRITICAL: Preview must show exactly what will be exported.
+    # If include_documents=False, documents do NOT appear in viewer.
+    # This prevents "worksheet in preview but not in export" confusion.
+    # ═══════════════════════════════════════════════════════════════════════════
+    selection_scope = st.session_state.selection_scope
+    
+    preview_files = []
+    
+    if selection_scope.include_images:
+        preview_files.extend(bucket_us.copy() if bucket_us else [])
+    
+    if selection_scope.include_documents:
+        preview_files.extend(bucket_docs.copy() if bucket_docs else [])
     
     # Pre-analyze all preview files for display
     file_info_cache = {}
@@ -2320,7 +2333,13 @@ if st.session_state.get('uploaded_dicom_files'):
                 'dimensions': f'{cols}×{rows}',
                 'aspect_ratio': aspect_ratio,
                 'temp_path': temp_path,
-                'doc_score': doc_score
+                'doc_score': doc_score,
+                # Phase 6: Additional fields for viewer series grouping
+                'sop_instance_uid': str(getattr(ds, 'SOPInstanceUID', 'UNKNOWN')),
+                'series_instance_uid': str(getattr(ds, 'SeriesInstanceUID', 'UNKNOWN')),
+                'instance_number': int(getattr(ds, 'InstanceNumber', 0)) if hasattr(ds, 'InstanceNumber') and ds.InstanceNumber is not None else None,
+                'series_number': int(getattr(ds, 'SeriesNumber', 0)) if hasattr(ds, 'SeriesNumber') and ds.SeriesNumber is not None else None,
+                'acquisition_time': str(getattr(ds, 'AcquisitionTime', '')) or str(getattr(ds, 'ContentTime', '')) or None,
             }
         except Exception as e:
             file_info_cache[f.name] = {
@@ -2330,7 +2349,13 @@ if st.session_state.get('uploaded_dicom_files'):
                 'is_worksheet': False,
                 'is_pure_us': False,
                 'temp_path': temp_path,
-                'worksheet_score': 0
+                'worksheet_score': 0,
+                # Phase 6: Fallback fields for viewer
+                'sop_instance_uid': 'UNKNOWN',
+                'series_instance_uid': 'UNKNOWN',
+                'instance_number': None,
+                'series_number': None,
+                'acquisition_time': None,
             }
     
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -2689,6 +2714,121 @@ if st.session_state.get('uploaded_dicom_files'):
                     # Review not started yet - prompt user to interact
                     st.caption("💡 *Toggle regions above or add manual regions to begin review.*")
     
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 6: SERIES BROWSER + STACK NAVIGATION
+    # Presentation-only. Does NOT affect processing, audit, or export.
+    # Ordering source: Gate 1 manifests when available, otherwise DICOM keys.
+    # ═══════════════════════════════════════════════════════════════════════════════
+    if preview_files and file_info_cache:
+        # Build viewer state if needed
+        if 'viewer_state' not in st.session_state or st.session_state.get('viewer_needs_rebuild', True):
+            st.session_state.viewer_state = build_viewer_state(
+                preview_files=preview_files,
+                file_info_cache=file_info_cache,
+                # Gate 1 manifests could be loaded here if available in session
+                ordered_series_manifest=None,
+                baseline_order_manifest=None,
+            )
+            st.session_state.viewer_needs_rebuild = False
+        
+        viewer_state: ViewerStudyState = st.session_state.viewer_state
+        
+        if viewer_state and viewer_state.series_list:
+            st.markdown("### 📂 Series Browser")
+            st.caption("Navigate through series and images. Ordering is preserved from source.")
+            
+            # Summary row
+            summary = viewer_state.get_summary()
+            if summary['hidden_series'] > 0:
+                st.caption(f"Showing {summary['filtered_series']} of {summary['total_series']} series ({summary['hidden_series']} non-image series hidden)")
+            
+            # Filter toggle
+            show_docs = st.checkbox(
+                "Show non-image objects (OT/SC)",
+                value=viewer_state.show_non_image_objects,
+                key="viewer_show_non_image",
+                help="Include Secondary Capture, OT, and other non-image modalities in the series list"
+            )
+            if show_docs != viewer_state.show_non_image_objects:
+                viewer_state.show_non_image_objects = show_docs
+                viewer_state.selected_series_idx = 0
+                viewer_state.selected_instance_idx = 0
+                st.rerun()
+            
+            # Two-column layout: series list | viewport
+            col_browser, col_viewport = st.columns([1, 3])
+            
+            filtered_series = viewer_state.filtered_series_list
+            
+            with col_browser:
+                st.markdown("**Series:**")
+                for idx, series in enumerate(filtered_series):
+                    is_selected = (idx == viewer_state.selected_series_idx)
+                    
+                    # Use container for visual selection
+                    if is_selected:
+                        st.markdown(f"▶ **{series.display_label}**")
+                    else:
+                        if st.button(series.display_label, key=f"series_btn_{idx}", use_container_width=True):
+                            viewer_state.select_series(idx)
+                            st.rerun()
+                
+                # Ordering provenance (audit-friendly transparency)
+                if viewer_state.selected_series:
+                    order_icon, order_desc = get_instance_ordering_label(viewer_state.selected_series.ordering_method)
+                    st.caption(f"{order_icon} *{order_desc}*")
+            
+            with col_viewport:
+                series = viewer_state.selected_series
+                instance = viewer_state.selected_instance
+                
+                if series and instance:
+                    # Stack position display
+                    current = viewer_state.selected_instance_idx + 1
+                    total = series.count
+                    
+                    st.markdown(f"**{series.series_description}** — Image {current} of {total}")
+                    
+                    # Navigation controls
+                    nav_col1, nav_col2, nav_col3 = st.columns([1, 8, 1])
+                    
+                    with nav_col1:
+                        if st.button("◀", key="viewer_prev_img", disabled=(current <= 1), use_container_width=True, help="Previous image"):
+                            viewer_state.prev_instance()
+                            st.rerun()
+                    
+                    with nav_col2:
+                        new_pos = st.slider(
+                            "Navigate",
+                            min_value=1,
+                            max_value=total,
+                            value=current,
+                            label_visibility="collapsed",
+                            key="viewer_stack_slider"
+                        )
+                        if new_pos != current:
+                            viewer_state.goto_instance(new_pos - 1)
+                            st.rerun()
+                    
+                    with nav_col3:
+                        if st.button("▶", key="viewer_next_img", disabled=(current >= total), use_container_width=True, help="Next image"):
+                            viewer_state.next_instance()
+                            st.rerun()
+                    
+                    # Display image
+                    try:
+                        pil_img, w, h = dicom_to_pil(instance.temp_path)
+                        st.image(pil_img, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Cannot display image: {e}")
+                    
+                    # Metadata footer
+                    st.caption(f"Modality: {instance.modality} | Instance#: {instance.instance_number or '—'} | Position: {instance.stack_position}/{total}")
+                else:
+                    st.info("Select a series to view images.")
+            
+            st.markdown("---")
+    
     if preview_files:
         st.markdown("### 🎨 Draw Redaction Mask")
         
@@ -2990,6 +3130,11 @@ if st.session_state.get('uploaded_dicom_files'):
     # PDF EXCLUSION: Filter out user-excluded Encapsulated PDFs from export
     # Phase 2: User-driven exclusion - does NOT affect masking or anonymisation
     # Phase 2 Hardening: Uses deterministic filename → UID mapping (no re-reading)
+    #
+    # GOVERNANCE GUARDRAIL (Phase 6):
+    # Export ordering uses Gate 1 manifests (source_order_manifest / export_order_manifest).
+    # Do NOT reference st.session_state.viewer_state for export ordering or file lists.
+    # viewer_state is presentation-only and may differ from export order.
     # ═══════════════════════════════════════════════════════════════════════════
     review_session = st.session_state.get('phi_review_session')
     if review_session and review_session.has_file_uid_mapping():

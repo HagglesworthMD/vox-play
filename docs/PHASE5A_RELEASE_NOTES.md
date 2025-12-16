@@ -7,6 +7,8 @@
 
 > **Invariant:** Phase 5A does not change masking defaults, acceptance gating, region actions, or audit logging. It only changes how existing region metadata is displayed.
 
+> *Post-tag wording hygiene: "required" → "helpful" in LOW_STRENGTH tooltip (no behavioral change).*
+
 ---
 
 ## Summary

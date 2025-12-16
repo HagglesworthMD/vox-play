@@ -144,6 +144,7 @@ from pdf_reporter import PDFReporter, create_report
 from review_session import ReviewSession, ReviewRegion, RegionSource, RegionAction, preflight_scan_dataset
 from decision_trace import DecisionTraceCollector, DecisionTraceWriter, record_region_decisions
 from phase5a_ui_semantics import RegionSemantics  # Phase 5A: Presentation-only UX semantics
+from selection_scope import SelectionScope, ObjectCategory, classify_object, should_include_object, get_category_label, generate_scope_audit_block, generate_scope_json  # Phase 6: Explicit selection semantics
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -235,6 +236,10 @@ frame_h = 0
 # Initialize review session state for Sprint 2 burned-in PHI review
 if 'phi_review_session' not in st.session_state:
     st.session_state.phi_review_session = None  # ReviewSession object
+
+# Phase 6: Initialize selection scope for explicit document inclusion
+if 'selection_scope' not in st.session_state:
+    st.session_state.selection_scope = SelectionScope.create_default()  # Conservative: images=True, documents=False
 
 def generate_clinical_filename(original_filename: str, new_patient_id: str, series_description: str) -> str:
     """
@@ -1550,6 +1555,16 @@ def dicom_to_pil(dcm_path: str) -> tuple:
 st.title("VoxelMask — Imaging De-Identification (Pilot Mode)")
 st.markdown("**Evaluation build. Copy-out processing only. Not for clinical use.**")
 
+# BUILD STAMP - temporary debug helper (remove after verification)
+def _build_stamp():
+    import subprocess, os, datetime
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    except Exception:
+        sha = "no-git"
+    return f"build={sha} pid={os.getpid()} cwd={os.getcwd()} ts={datetime.datetime.now().isoformat(timespec='seconds')}"
+st.caption(_build_stamp())
+
 # Initialize variables (previously in sidebar)
 enable_manual_mask = True
 clinical_context = None
@@ -1805,6 +1820,64 @@ else:
         st.warning(text)
     else:
         st.info(text)
+    
+    st.divider()
+    
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 6: EXPLICIT SELECTION SCOPE
+    # Replaces implicit document handling with explicit operator toggles.
+    # Default is conservative: images included, documents excluded.
+    # ═══════════════════════════════════════════════════════════════════════════════
+    
+    st.markdown("### 📋 Selection Scope")
+    st.caption("Define which object types are included in the output package.")
+    
+    # Get current selection scope from session state
+    selection_scope = st.session_state.selection_scope
+    
+    scope_col1, scope_col2 = st.columns(2)
+    
+    with scope_col1:
+        include_images = st.checkbox(
+            "☑ **Include Imaging Series**",
+            value=selection_scope.include_images,
+            help="Include standard imaging modalities (US, CT, MR, XR, etc.) in the output package.",
+            key="scope_include_images"
+        )
+        if include_images != selection_scope.include_images:
+            selection_scope.set_include_images(include_images)
+    
+    with scope_col2:
+        include_documents = st.checkbox(
+            "☐ **Include Associated Documents**",
+            value=selection_scope.include_documents,
+            help="Non-image objects (worksheets, reports, SC, OT) are only included when explicitly selected. This affects output content and audit records.",
+            key="scope_include_documents"
+        )
+        if include_documents != selection_scope.include_documents:
+            selection_scope.set_include_documents(include_documents)
+    
+    # Show explicit status message based on document selection
+    if not selection_scope.include_documents:
+        st.markdown("""
+        <div style="background: rgba(139, 148, 158, 0.1); border: 1px solid rgba(139, 148, 158, 0.3); 
+                    border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
+            <span style="color: #8b949e;">ℹ️ <strong>Associated Documents: Excluded by selection</strong></span>
+            <br><span style="color: #6e7681; font-size: 12px;">
+            Worksheets, reports, SC/OT objects, and PDFs will not appear in output package, viewer, or audit evidence bundle.
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background: rgba(51, 145, 255, 0.1); border: 1px solid rgba(51, 145, 255, 0.3); 
+                    border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
+            <span style="color: #3391ff;">📋 <strong>Associated Documents: Included</strong></span>
+            <br><span style="color: #6e7681; font-size: 12px;">
+            Worksheets, reports, SC/OT objects, and PDFs will be included and labelled as "Associated Objects" in the output.
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
     
     st.divider()
 
@@ -2086,33 +2159,48 @@ if st.session_state.get('uploaded_dicom_files'):
                     temp.write(file_buffer.getbuffer())
                     temp.close()
                     
-                    # Read modality without pixel data for safety
+                    # Read minimal dataset header (no pixel data)
                     ds = pydicom.dcmread(temp.name, stop_before_pixels=True)
                     modality = str(getattr(ds, 'Modality', '')).upper()
                     series_desc = str(getattr(ds, 'SeriesDescription', '')).upper()
+                    sop_class_uid = str(getattr(ds, 'SOPClassUID', ''))
                     
-                    # Categorize files:
+                    # ═══════════════════════════════════════════════════════════════
+                    # PHASE 6 FIX: SOP Class–Based Classification (Single Source of Truth)
+                    # 
+                    # CRITICAL: This is the ONLY place where bucket assignment happens.
+                    # We use classify_object() which checks SOP Class UID first, then
+                    # falls back to modality/keywords. This prevents documents from
+                    # leaking into image buckets via modality string manipulation.
+                    #
+                    # Buckets:
                     # - bucket_us: Pure ultrasound images (shared mask)
-                    # - bucket_docs: Worksheets, SC, OT (individual masks)
+                    # - bucket_docs: Documents, SC, OT, SR, PDFs (gated by include_documents)
                     # - bucket_safe: CT, MR, etc (no pixel masking needed)
-                    # - bucket_skip: SR, DOC, PR (structural reports)
+                    # ═══════════════════════════════════════════════════════════════
                     
-                    if modality == 'US':
-                        # Check if this is actually a worksheet disguised as US
-                        if any(kw in series_desc for kw in ['WORKSHEET', 'REPORT', 'SUMMARY', 'FORM', 'TABLE', 'CHART']):
-                            bucket_docs.append(file_buffer)  # Worksheet disguised as US
+                    category = classify_object(
+                        modality=modality,
+                        sop_class_uid=sop_class_uid,
+                        series_description=series_desc,
+                        image_type=''
+                    )
+                    
+                    if category == ObjectCategory.IMAGE:
+                        # IMAGE category: Check modality for US vs safe bucket
+                        if modality == 'US':
+                            bucket_us.append(file_buffer)
                         else:
-                            bucket_us.append(file_buffer)  # Real US image
-                    elif modality in ['SC', 'OT']:
-                        # SC/OT are worksheets/screenshots - need individual masking
+                            bucket_safe.append(file_buffer)
+                    elif category in (
+                        ObjectCategory.DOCUMENT,
+                        ObjectCategory.STRUCTURED_REPORT,
+                        ObjectCategory.ENCAPSULATED_PDF,
+                    ):
+                        # Document category: All gated by include_documents toggle
                         bucket_docs.append(file_buffer)
-                    elif modality in ['SR', 'DOC', 'PR']:
-                        # Structured reports - may need masking but often excluded
-                        bucket_docs.append(file_buffer)  # Include for preview, user can mask
-                    elif modality in PREVIEW_SKIP_MODALITIES or modality in ['CT', 'MR', 'XR', 'XA', 'MG', 'NM', 'PT', 'DX', 'RF', 'CR']:
-                        bucket_safe.append(file_buffer)
                     else:
-                        # Unknown modalities - assume they might need masking
+                        # Unknown category (shouldn't happen) → conservative, goes to docs
                         bucket_docs.append(file_buffer)
                     
                     # Clean up temp file
@@ -2313,15 +2401,30 @@ if st.session_state.get('uploaded_dicom_files'):
             else:
                 st.info("📋 Review not started - regions shown below are auto-detected defaults")
             
-            # Summary metrics
+            # Summary metrics - AUTHORITATIVE: Derived only from ReviewSession state
+            # This is governance-critical: UI must match audit trail
             summary = review_session.get_summary()
+            total_regions = summary['total_regions']
+            
             col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Detected Regions", summary['ocr_regions'])
-            with col2:
-                st.metric("Manual Regions", summary['manual_regions'])
-            with col3:
-                st.metric("Will Mask", summary['will_mask'])
+            
+            # If no regions exist, detection hasn't run yet - show 'Pending' not '0'
+            # This prevents misleading UI (showing "0" when actual count is unknown)
+            if total_regions == 0 and not review_session.review_accepted:
+                with col1:
+                    st.metric("Detected Regions", "—", help="Detection runs during processing")
+                with col2:
+                    st.metric("Manual Regions", summary['manual_regions'])
+                with col3:
+                    st.metric("Will Mask", "—", help="Determined after detection")
+            else:
+                # Regions exist or review is complete - show authoritative counts
+                with col1:
+                    st.metric("Detected Regions", summary['ocr_regions'])
+                with col2:
+                    st.metric("Manual Regions", summary['manual_regions'])
+                with col3:
+                    st.metric("Will Mask", summary['will_mask'])
             
             # ═══════════════════════════════════════════════════════════════════
             # PREFLIGHT FINDINGS INDICATOR (Read-Only, Informational)
@@ -2821,15 +2924,67 @@ if st.session_state.get('uploaded_dicom_files'):
     all_files = []
     selected_filenames = set(selected_files['Filename'].values)  # Files checked in the data editor
     
-    # Include US, documents, and safe files
-    for fb in bucket_us + bucket_docs + bucket_safe:
-        if fb.name in selected_filenames:
-            all_files.append(fb)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 6: Apply Selection Scope Filtering
+    # Documents are ONLY included when explicitly selected via include_documents toggle
+    # ═══════════════════════════════════════════════════════════════════════════
+    selection_scope = st.session_state.selection_scope
+    
+    # Track counts for Phase 6 UI integrity (no "Documents 0" lie)
+    included_image_count = 0
+    excluded_document_count = 0
+    included_document_count = 0
+    
+    # Process imaging files (bucket_us, bucket_safe)
+    if selection_scope.include_images:
+        for fb in bucket_us + bucket_safe:
+            if fb.name in selected_filenames:
+                all_files.append(fb)
+                included_image_count += 1
+    
+    # Process document files (bucket_docs) - ONLY if include_documents is explicitly True
+    if selection_scope.include_documents:
+        for fb in bucket_docs:
+            if fb.name in selected_filenames:
+                all_files.append(fb)
+                included_document_count += 1
+    else:
+        # Count how many documents were excluded by selection scope
+        for fb in bucket_docs:
+            if fb.name in selected_filenames:
+                excluded_document_count += 1
     
     if not exclude_sr:
         for fb in bucket_skip:
             if fb.name in selected_filenames:
-                all_files.append(fb)
+                # SR files are documents, respect the toggle
+                if selection_scope.include_documents:
+                    all_files.append(fb)
+                    included_document_count += 1
+                else:
+                    excluded_document_count += 1
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 6: UI Integrity - Show accurate exclusion message
+    # No "Documents 0" lie - show "Excluded by selection" when documents are not included
+    # ═══════════════════════════════════════════════════════════════════════════
+    if excluded_document_count > 0:
+        st.markdown(f"""
+        <div style="background: rgba(139, 148, 158, 0.1); border: 1px solid rgba(139, 148, 158, 0.3); 
+                    border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
+            <span style="color: #8b949e;">📋 <strong>{excluded_document_count} Associated Document{'s' if excluded_document_count > 1 else ''}: Excluded by selection</strong></span>
+            <br><span style="color: #6e7681; font-size: 12px;">
+            Enable "Include Associated Documents" to include worksheets/reports in output.
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+    elif included_document_count > 0:
+        st.markdown(f"""
+        <div style="background: rgba(51, 145, 255, 0.1); border: 1px solid rgba(51, 145, 255, 0.3); 
+                    border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px;">
+            <span style="color: #3391ff;">📋 <strong>{included_document_count} Associated Object{'s' if included_document_count > 1 else ''}</strong> included in output</span>
+        </div>
+        """, unsafe_allow_html=True)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # PDF EXCLUSION: Filter out user-excluded Encapsulated PDFs from export
@@ -3203,6 +3358,14 @@ if st.session_state.get('uploaded_dicom_files'):
                 
                 processed_files = []
                 combined_audit_logs = []
+                
+                # ═══════════════════════════════════════════════════════════════
+                # PHASE 6: Add Selection Scope to Audit Log (NON-NEGOTIABLE)
+                # Every run MUST record selection_scope for FOI defensibility
+                # ═══════════════════════════════════════════════════════════════
+                selection_scope = st.session_state.selection_scope
+                scope_audit_block = generate_scope_audit_block(selection_scope)
+                combined_audit_logs.append(scope_audit_block)
                 
                 # ═══════════════════════════════════════════════════════════════
                 # DIAGNOSTIC TRACKING - Start timer and byte counter

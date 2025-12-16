@@ -344,3 +344,143 @@ Any of the following changes **invalidate this freeze** and require re-evaluatio
 ---
 
 *This freeze log entry is audit-grade and suitable for governance, FOI officers, or acquisition due-diligence review.*
+
+---
+
+# Freeze Log Entry — Phase 6 (SOP Class Classification Fix)
+
+## Phase
+
+**Phase 6 — SOP Class-Based Object Classification**
+
+---
+
+## Status
+
+**IMPLEMENTED**
+
+Critical loophole in document exclusion logic has been closed.
+
+---
+
+## Implementation Date
+
+**16 December 2025**
+
+---
+
+## Bug Summary
+
+A critical bug was identified where DICOM objects could bypass the `include_documents=False` filter by having a mismatched modality string.
+
+### Root Cause
+
+The bucket classification logic in `app.py` used **modality string** as the primary classifier:
+
+```python
+# OLD (VULNERABLE):
+if modality == 'US':
+    bucket_us.append(file_buffer)
+elif modality in ['SC', 'OT']:
+    bucket_docs.append(file_buffer)
+```
+
+This allowed documents to leak into image buckets if their Modality tag was incorrectly set (e.g., an Encapsulated PDF with Modality="US").
+
+### Attack Vector Examples
+
+| Object Type | SOP Class UID | Modality | OLD Bucket | Risk |
+|-------------|---------------|----------|------------|------|
+| Encapsulated PDF | `1.2.840.10008.5.1.4.1.1.104.1` | `US` | `bucket_us` | **BYPASS** |
+| Secondary Capture | `1.2.840.10008.5.1.4.1.1.7` | `CT` | `bucket_safe` | **BYPASS** |
+| Multi-frame SC | `1.2.840.10008.5.1.4.1.1.7.1` | `MR` | `bucket_safe` | **BYPASS** |
+
+---
+
+## Fix Applied
+
+The bucket classification now uses `classify_object()` from `selection_scope.py` as the **single source of truth**:
+
+```python
+# NEW (SECURE):
+category = classify_object(
+    modality=modality,
+    sop_class_uid=sop_class_uid,
+    series_description=series_desc,
+    image_type=''
+)
+
+if category == ObjectCategory.IMAGE:
+    if modality == 'US':
+        bucket_us.append(file_buffer)
+    else:
+        bucket_safe.append(file_buffer)
+elif category in (ObjectCategory.DOCUMENT, ObjectCategory.STRUCTURED_REPORT, 
+                  ObjectCategory.ENCAPSULATED_PDF):
+    bucket_docs.append(file_buffer)
+```
+
+### Classification Priority Order
+
+1. **SOP Class UID** (authoritative) — checked first
+2. **Modality string** (fallback) — only if SOP Class not in known list
+3. **SeriesDescription keywords** — last resort for worksheet detection
+
+---
+
+## Behaviour After Fix
+
+| Object Type | SOP Class UID | Modality | NEW Bucket | Gate |
+|-------------|---------------|----------|------------|------|
+| Encapsulated PDF | `1.2.840.10008.5.1.4.1.1.104.1` | `US` | `bucket_docs` | `include_documents` |
+| Secondary Capture | `1.2.840.10008.5.1.4.1.1.7` | `CT` | `bucket_docs` | `include_documents` |
+| Real US Image | `1.2.840.10008.5.1.4.1.1.6.1` | `US` | `bucket_us` | `include_images` |
+| Real CT Image | `1.2.840.10008.5.1.4.1.1.2` | `CT` | `bucket_safe` | `include_images` |
+
+---
+
+## Regression Tests Added
+
+New test class `TestSOPClassOverridesModality` in `tests/test_selection_scope.py`:
+
+* `test_pdf_with_us_modality_is_still_pdf` — CRITICAL loophole test
+* `test_secondary_capture_with_ct_modality_is_document`
+* `test_multiframe_sc_with_mr_modality_is_document`
+* `test_sr_sop_with_us_modality_is_sr`
+* `test_sop_class_takes_priority_over_safe_modality`
+* `test_document_exclusion_works_with_mismatched_modality` — END-TO-END
+* `test_real_us_image_still_included`
+* `test_real_ct_image_still_included`
+
+---
+
+## Governance Impact
+
+* **FOI Defensibility**: `include_documents=False` now truly excludes all documents
+* **Audit Integrity**: Selection scope is recorded accurately
+* **Series Preservation**: No impact on Gate 1 ordering guarantees
+* **PACS Realism**: SOP Class is the correct DICOM identity, not modality string
+
+---
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `src/app.py` | Replaced modality-based bucket logic with `classify_object()` |
+| `tests/test_selection_scope.py` | Added `TestSOPClassOverridesModality` regression tests |
+| `docs/FREEZE_LOG.md` | This entry |
+
+---
+
+## Sign-Off
+
+**Declared by:** Project Owner / Engineer  
+**Role:** PACS Systems Engineer (Pilot Context)  
+**Project:** VoxelMask  
+**Date:** 16 December 2025
+
+---
+
+*This fix closes a critical loophole and is required for governance-safe, acquisition-clean deployment.*
+

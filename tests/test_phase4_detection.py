@@ -433,3 +433,168 @@ class TestPopulateRegionsFromDetection:
         region = session.get_regions()[0]
         assert region.frame_index == 5
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 4: AUDIT LOG ENRICHMENT TESTS (Option C)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAuditLogEnrichment:
+    """Tests for Phase 4 audit log enrichment with OCR detection metadata."""
+    
+    def test_decision_record_includes_ocr_fields(self):
+        """DecisionRecord should have OCR detection metadata fields."""
+        from decision_trace import DecisionRecord
+        
+        record = DecisionRecord(
+            scope_level="PIXEL_REGION",
+            scope_uid="1.2.3",
+            action_type="MASKED",
+            target_type="PIXEL_REGION",
+            target_name="PixelRegion[0]",
+            reason_code="BURNED_IN_TEXT_DETECTED",
+            rule_source="MODALITY_SAFETY_PROTOCOL",
+            region_x=10,
+            region_y=20,
+            region_w=100,
+            region_h=50,
+            detection_strength="HIGH",
+            ocr_failure=False,
+            confidence_aggregation="min",
+            ocr_engine="PaddleOCR",
+        )
+        
+        assert record.detection_strength == "HIGH"
+        assert record.ocr_failure is False
+        assert record.confidence_aggregation == "min"
+        assert record.ocr_engine == "PaddleOCR"
+    
+    def test_decision_record_defaults_to_none(self):
+        """OCR fields should default to None for non-OCR decisions."""
+        from decision_trace import DecisionRecord
+        
+        record = DecisionRecord(
+            scope_level="INSTANCE",
+            scope_uid="1.2.3",
+            action_type="REMOVED",
+            target_type="TAG",
+            target_name="PatientName",
+            reason_code="HIPAA_18_NAME",
+            rule_source="HIPAA_SAFE_HARBOR",
+        )
+        
+        assert record.detection_strength is None
+        assert record.ocr_failure is None
+        assert record.confidence_aggregation is None
+        assert record.ocr_engine is None
+    
+    def test_ocr_failure_recorded_as_none_strength(self):
+        """OCR failure should be logged as detection_strength=None."""
+        from decision_trace import DecisionRecord
+        
+        record = DecisionRecord(
+            scope_level="PIXEL_REGION",
+            scope_uid="1.2.3",
+            action_type="MASKED",
+            target_type="PIXEL_REGION",
+            target_name="PixelRegion[0]",
+            reason_code="BURNED_IN_TEXT_DETECTED",
+            rule_source="MODALITY_SAFETY_PROTOCOL",
+            detection_strength=None,  # OCR failed
+            ocr_failure=True,
+            confidence_aggregation="min",
+            ocr_engine="PaddleOCR",
+        )
+        
+        assert record.detection_strength is None
+        assert record.ocr_failure is True
+    
+    def test_collector_accepts_ocr_metadata(self):
+        """DecisionTraceCollector.add() should accept OCR metadata."""
+        from decision_trace import DecisionTraceCollector
+        
+        collector = DecisionTraceCollector()
+        collector.add(
+            scope_level="PIXEL_REGION",
+            action_type="MASKED",
+            target_type="PIXEL_REGION",
+            target_name="PixelRegion[0]",
+            reason_code="BURNED_IN_TEXT_DETECTED",
+            rule_source="MODALITY_SAFETY_PROTOCOL",
+            scope_uid="1.2.3.test",
+            detection_strength="MEDIUM",
+            ocr_failure=False,
+            confidence_aggregation="min",
+            ocr_engine="PaddleOCR",
+        )
+        
+        decisions = collector.get_decisions()
+        assert len(decisions) == 1
+        assert decisions[0].detection_strength == "MEDIUM"
+        assert decisions[0].ocr_failure is False
+        assert decisions[0].confidence_aggregation == "min"
+    
+    def test_record_region_decisions_includes_ocr_metadata(self):
+        """record_region_decisions should include OCR metadata for OCR regions."""
+        from decision_trace import DecisionTraceCollector, record_region_decisions
+        from review_session import ReviewSession, RegionSource
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        session.add_ocr_region(x=50, y=100, w=400, h=80, detection_strength="HIGH")
+        session.start_review()
+        
+        collector = DecisionTraceCollector()
+        count = record_region_decisions(
+            collector,
+            session.get_active_regions(),
+            "1.2.3.test"
+        )
+        
+        assert count == 1
+        decisions = collector.get_decisions()
+        assert decisions[0].detection_strength == "HIGH"
+        assert decisions[0].ocr_failure is False  # HIGH means OCR succeeded
+        assert decisions[0].confidence_aggregation == "min"
+        assert decisions[0].ocr_engine == "PaddleOCR"
+    
+    def test_record_region_decisions_ocr_failure_logged(self):
+        """record_region_decisions should log OCR failure correctly."""
+        from decision_trace import DecisionTraceCollector, record_region_decisions
+        from review_session import ReviewSession
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        # OCR failure = detection_strength is None
+        session.add_ocr_region(x=50, y=100, w=400, h=80, detection_strength=None)
+        session.start_review()
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(
+            collector,
+            session.get_active_regions(),
+            "1.2.3.test"
+        )
+        
+        decisions = collector.get_decisions()
+        assert decisions[0].detection_strength is None
+        assert decisions[0].ocr_failure is True  # None strength = failure
+    
+    def test_manual_region_no_ocr_metadata(self):
+        """Manual regions should not have OCR metadata."""
+        from decision_trace import DecisionTraceCollector, record_region_decisions
+        from review_session import ReviewSession
+        
+        session = ReviewSession.create(sop_instance_uid="1.2.3.test")
+        session.add_manual_region(x=50, y=100, w=400, h=80)
+        session.start_review()
+        
+        collector = DecisionTraceCollector()
+        record_region_decisions(
+            collector,
+            session.get_active_regions(),
+            "1.2.3.test"
+        )
+        
+        decisions = collector.get_decisions()
+        assert decisions[0].detection_strength is None
+        assert decisions[0].ocr_failure is None  # None, not False
+        assert decisions[0].confidence_aggregation is None
+        assert decisions[0].ocr_engine is None

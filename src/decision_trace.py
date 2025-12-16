@@ -172,6 +172,9 @@ class DecisionRecord:
     Single decision record (in-memory representation).
     
     Immutable after creation. Contains no PHI - only reasons and references.
+    
+    Phase 4 Enhancement: Includes OCR detection metadata fields for audit truth.
+    These fields capture detection uncertainty without implying OCR "success".
     """
     scope_level: str
     scope_uid: Optional[str]
@@ -186,6 +189,11 @@ class DecisionRecord:
     region_y: Optional[int] = None
     region_w: Optional[int] = None
     region_h: Optional[int] = None
+    # Phase 4: OCR Detection Metadata (audit truth)
+    detection_strength: Optional[str] = None  # LOW, MEDIUM, HIGH, or None (OCR failed)
+    ocr_failure: Optional[bool] = None  # True = OCR engine threw exception
+    confidence_aggregation: Optional[str] = None  # Aggregation method (e.g., "min")
+    ocr_engine: Optional[str] = None  # OCR engine identifier (e.g., "PaddleOCR")
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
 
 
@@ -219,7 +227,12 @@ class DecisionTraceCollector:
         region_x: int = None,
         region_y: int = None,
         region_w: int = None,
-        region_h: int = None
+        region_h: int = None,
+        # Phase 4: OCR Detection Metadata
+        detection_strength: str = None,
+        ocr_failure: bool = None,
+        confidence_aggregation: str = None,
+        ocr_engine: str = None,
     ) -> None:
         """
         Add a decision record to the collector.
@@ -235,6 +248,10 @@ class DecisionTraceCollector:
             checksum_before: SHA256 of original value (truncated, optional)
             checksum_after: SHA256 of new value (truncated, optional)
             region_x, region_y, region_w, region_h: Pixel region bounds (optional)
+            detection_strength: Phase 4 - LOW/MEDIUM/HIGH or None (OCR failed)
+            ocr_failure: Phase 4 - True if OCR engine threw exception
+            confidence_aggregation: Phase 4 - Aggregation method (e.g., "min")
+            ocr_engine: Phase 4 - OCR engine identifier (e.g., "PaddleOCR")
             
         Raises:
             RuntimeError: If collector is locked (already committed)
@@ -255,7 +272,11 @@ class DecisionTraceCollector:
             region_x=region_x,
             region_y=region_y,
             region_w=region_w,
-            region_h=region_h
+            region_h=region_h,
+            detection_strength=detection_strength,
+            ocr_failure=ocr_failure,
+            confidence_aggregation=confidence_aggregation,
+            ocr_engine=ocr_engine,
         )
         self._decisions.append(record)
     
@@ -617,6 +638,12 @@ def record_region_decisions(
     - OCR region, reviewer MASK (explicit) → USER_MASK_REGION_SELECTED
     - Manual region → USER_MASK_REGION_SELECTED
     
+    Phase 4 Enhancement: Includes OCR detection metadata for audit truth.
+    - detection_strength: LOW/MEDIUM/HIGH/None
+    - ocr_failure: True if OCR engine threw exception
+    - confidence_aggregation: Always "min" (pessimistic)
+    - ocr_engine: "PaddleOCR" for OCR regions, None for manual
+    
     Called at export time, after reviewer has accepted.
     
     Args:
@@ -642,6 +669,17 @@ def record_region_decisions(
         
         # Determine final action
         final_action = region.get_effective_action()
+        
+        # Phase 4: Extract OCR detection metadata from region
+        # Only populated for OCR-sourced regions
+        is_ocr = region.source == RegionSource.OCR
+        detection_strength = getattr(region, 'detection_strength', None) if is_ocr else None
+        # OCR failure = detection_strength is None for OCR region
+        ocr_failure = (detection_strength is None) if is_ocr else None
+        # Aggregation method is always "min" (documented in Phase 4)
+        confidence_aggregation = "min" if is_ocr else None
+        # OCR engine identifier
+        ocr_engine = "PaddleOCR" if is_ocr else None
         
         if final_action == RegionAction.MASK:
             # Determine reason code based on source and whether reviewer modified
@@ -669,7 +707,12 @@ def record_region_decisions(
                 region_x=region.x,
                 region_y=region.y,
                 region_w=region.w,
-                region_h=region.h
+                region_h=region.h,
+                # Phase 4: OCR Detection Metadata
+                detection_strength=detection_strength,
+                ocr_failure=ocr_failure,
+                confidence_aggregation=confidence_aggregation,
+                ocr_engine=ocr_engine,
             )
             count += 1
         
@@ -686,7 +729,12 @@ def record_region_decisions(
                 region_x=region.x,
                 region_y=region.y,
                 region_w=region.w,
-                region_h=region.h
+                region_h=region.h,
+                # Phase 4: OCR Detection Metadata
+                detection_strength=detection_strength,
+                ocr_failure=ocr_failure,
+                confidence_aggregation=confidence_aggregation,
+                ocr_engine=ocr_engine,
             )
             count += 1
     

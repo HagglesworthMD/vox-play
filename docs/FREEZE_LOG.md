@@ -484,3 +484,168 @@ New test class `TestSOPClassOverridesModality` in `tests/test_selection_scope.py
 
 *This fix closes a critical loophole and is required for governance-safe, acquisition-clean deployment.*
 
+---
+
+# Freeze Log Entry — Phase 6 (Series Browser)
+
+## Phase
+
+**Phase 6 — Viewer UX Hardening (Series Browser)**
+
+---
+
+## Status
+
+**IMPLEMENTED — Presentation-Only**
+
+No processing, masking, audit, or export behaviour was modified.
+
+---
+
+## Implementation Date
+
+**17 December 2025**
+
+---
+
+## Feature Summary
+
+Added PACS-style series browser and stack navigation to address pilot usability feedback. The viewer now groups images by SeriesInstanceUID and provides stack navigation with ordering provenance display.
+
+### Problem Addressed
+
+Previous viewer showed flat list of images with no series grouping. PACS users expect:
+- Series → Instance hierarchy
+- Stack scroll/cine through logically related images
+- Consistent ordering within series
+
+---
+
+## Scope of Changes
+
+### What WAS Changed (Presentation-Only)
+
+| Component | Change |
+|-----------|--------|
+| `src/viewer_state.py` | NEW: Series grouping and stack navigation abstraction |
+| `src/app.py` | Added series browser UI component |
+| `file_info_cache` | Enhanced with DICOM fields for grouping |
+| Left panel | Series list with modality icons and instance counts |
+| Main viewport | Stack navigation with ◀/▶ buttons and slider |
+| OT/SC filtering | Default hidden, toggleable |
+
+### What Was NOT Changed (Governance Preserved)
+
+| Component | Status |
+|-----------|--------|
+| Processing pipeline | ❌ Untouched |
+| Masking logic | ❌ Untouched |
+| Anonymisation | ❌ Untouched |
+| Audit logs | ❌ Untouched |
+| Evidence bundles | ❌ Untouched |
+| Export ordering | ❌ Untouched — uses Gate 1 manifests |
+| Series/instance structure on disk | ❌ Untouched |
+
+---
+
+## Ordering Priority
+
+Instance order within series (for viewer display):
+
+1. `ordered_series_manifest` → `ordered_index` (when Gate 1 manifest provided)
+2. `InstanceNumber` (0020,0013)
+3. `AcquisitionTime` / `ContentTime`
+4. Filename (last resort, logged)
+
+Series order in browser:
+
+1. `baseline_order_manifest` → first occurrence (when Gate 1 manifest provided)
+2. `SeriesNumber`
+3. Discovery order
+
+### Runtime Status
+
+Viewer **supports** Gate 1 manifests when provided. Currently receives `None` at runtime as manifests are static governance artefacts, not dynamically generated.
+
+---
+
+## Governance Guardrails
+
+### Explicit Comment Added (Export Path)
+
+```python
+# GOVERNANCE GUARDRAIL (Phase 6):
+# Export ordering uses Gate 1 manifests (source_order_manifest / export_order_manifest).
+# Do NOT reference st.session_state.viewer_state for export ordering or file lists.
+# viewer_state is presentation-only and may differ from export order.
+```
+
+### Design Constraints
+
+- `viewer_state` is never referenced in export path
+- Viewer cannot mutate processing data structures
+- All viewer state is derived from read-only DICOM metadata
+
+---
+
+## Test Coverage
+
+| Test File | Tests | Status |
+|-----------|-------|--------|
+| `test_viewer_state.py` | 21 | ✅ All passing |
+| `test_audit_unit.py` | 35 | ✅ All passing (import fix applied) |
+| Full suite | 769 | ✅ All passing |
+
+### Key Test Cases
+
+- `test_uses_ordered_index_when_present` — manifest priority
+- `test_falls_back_to_instance_number_when_no_manifest` — deterministic fallback
+- `test_uses_baseline_first_seen_when_present` — series ordering
+- `test_filename_fallback_last_resort` — warning logged
+
+---
+
+## Known Limitations (Intentional)
+
+| Feature | Status | Rationale |
+|---------|--------|-----------|
+| Mouse wheel scrolling | Not implemented | Requires custom JS component |
+| US singles grouping | Not implemented | Governance-sensitive |
+| Multi-frame cine | Not implemented | Needs explicit frame model |
+| Runtime manifest loading | Deferred | Gate 1 artefacts are static |
+
+These are explicitly deferred, not overlooked.
+
+---
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `src/viewer_state.py` | NEW: 500+ lines of viewer abstraction |
+| `src/app.py` | Added UI integration (~120 lines) |
+| `tests/test_viewer_state.py` | NEW: 21 tests |
+| `tests/test_audit_unit.py` | Fixed import collision |
+
+---
+
+## Commits
+
+1. `feat(viewer): Phase 6 series browser and stack navigation (presentation-only)`
+2. `test(viewer): add viewer_state ordering and navigation tests`
+3. `fix(tests): resolve audit module/package import collision`
+
+---
+
+## Sign-Off
+
+**Declared by:** Project Owner / Engineer  
+**Role:** PACS Systems Engineer (Pilot Context)  
+**Project:** VoxelMask  
+**Date:** 17 December 2025
+
+---
+
+*This implementation is presentation-only and does not affect processing outcomes, audit evidence, or export behaviour. Suitable for pilot use.*
+
+

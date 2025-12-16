@@ -79,7 +79,13 @@ studies/
 
 # Build artifacts
 *.zip
+!docs/gate1_evidence/GATE1_EVIDENCE_BUNDLE.zip
 coverage.xml
 
 # Local debug / UI inspection utilities
 check_sidebar.py
+
+# Gate 1 evidence - source data (DO NOT COMMIT - contains PHI)
+docs/gate1_evidence/source_data/
+docs/gate1_evidence/*.dcm
+FOI_*/

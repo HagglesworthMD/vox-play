@@ -1,0 +1,51 @@
+{
+  "all_checks_passed": true,
+  "baseline_hash": "67b3369abb2ebae282a24660e775f21b793354db2011c6dd358a3fc170da7b9e",
+  "baseline_manifest_id": "f28ba6f8-7a9a-497c-83b8-5f61b5a31107",
+  "decision_log_hash": "478b4c3397c6ee46fccb57a0e803013e9ae1cb5b0efe686635a340838040ffd4",
+  "failure_reasons": [],
+  "ordered_hash": "5119343edab9f116726eae4fa6a092b643e5ab93510e70b54adbc727027fab70",
+  "ordered_manifest_id": "d81783a0-266b-425a-9aa1-8c00b2ffe589",
+  "report_id": "5dc3aeb6-a743-4d2e-8c62-d62857391881",
+  "series_results": [
+    {
+      "baseline_count": 43,
+      "dropped_instances": 0,
+      "duplicate_uids": [],
+      "ordered_count": 43,
+      "passed": true,
+      "reorders_with_decision": 0,
+      "reorders_without_decision": 0,
+      "series_instance_uid": "1.2.392.200036.9116.6.18.17543328.9500.20240221225741415.4.8",
+      "unexplained_changes": []
+    },
+    {
+      "baseline_count": 7,
+      "dropped_instances": 0,
+      "duplicate_uids": [],
+      "ordered_count": 7,
+      "passed": true,
+      "reorders_with_decision": 0,
+      "reorders_without_decision": 0,
+      "series_instance_uid": "1.2.840.113619.2.169.579907165010730.11.254195.1708558522",
+      "unexplained_changes": []
+    },
+    {
+      "baseline_count": 5,
+      "dropped_instances": 0,
+      "duplicate_uids": [],
+      "ordered_count": 5,
+      "passed": true,
+      "reorders_with_decision": 4,
+      "reorders_without_decision": 0,
+      "series_instance_uid": "501570569999999",
+      "unexplained_changes": []
+    }
+  ],
+  "timestamp": "2025-12-16T09:01:09.185584+00:00",
+  "total_baseline_count": 55,
+  "total_dropped": 0,
+  "total_duplicates": 0,
+  "total_ordered_count": 55,
+  "total_unexplained_reorders": 0
+}

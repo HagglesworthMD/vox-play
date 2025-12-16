@@ -598,3 +598,164 @@ class TestAuditLogEnrichment:
         assert decisions[0].ocr_failure is None  # None, not False
         assert decisions[0].confidence_aggregation is None
         assert decisions[0].ocr_engine is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 4 OPTION B: HEADER/FOOTER BANDING TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestZoneClassification:
+    """Tests for Phase 4 Option B static header/footer banding."""
+    
+    def test_classify_zone_header(self):
+        """Box in top 15% should be classified as HEADER."""
+        from run_on_dicom import _classify_zone
+        
+        # Image height 1000, box at y=50 with height 20
+        # Center = 60, which is 6% of 1000 (< 15% threshold)
+        zone = _classify_zone(y=50, h=20, image_height=1000)
+        assert zone == "HEADER"
+    
+    def test_classify_zone_footer(self):
+        """Box in bottom 15% should be classified as FOOTER."""
+        from run_on_dicom import _classify_zone
+        
+        # Image height 1000, box at y=900 with height 50
+        # Center = 925, which is 92.5% of 1000 (> 85% threshold)
+        zone = _classify_zone(y=900, h=50, image_height=1000)
+        assert zone == "FOOTER"
+    
+    def test_classify_zone_body(self):
+        """Box in middle should be classified as BODY."""
+        from run_on_dicom import _classify_zone
+        
+        # Image height 1000, box at y=400 with height 100
+        # Center = 450, which is 45% of 1000 (between 15% and 85%)
+        zone = _classify_zone(y=400, h=100, image_height=1000)
+        assert zone == "BODY"
+    
+    def test_classify_zone_header_boundary(self):
+        """Box exactly at header threshold boundary."""
+        from run_on_dicom import _classify_zone
+        
+        # Image height 1000, box center at exactly 15%
+        # y + h/2 = 150, so y=140, h=20
+        zone = _classify_zone(y=140, h=20, image_height=1000)
+        assert zone == "HEADER"  # <= 0.15 is HEADER
+    
+    def test_classify_zone_footer_boundary(self):
+        """Box exactly at footer threshold boundary."""
+        from run_on_dicom import _classify_zone
+        
+        # Image height 1000, box center at exactly 85%
+        # y + h/2 = 850, so y=840, h=20
+        zone = _classify_zone(y=840, h=20, image_height=1000)
+        assert zone == "FOOTER"  # >= 0.85 is FOOTER
+    
+    def test_classify_zone_modality_us(self):
+        """US modality should use tighter thresholds (12%)."""
+        from run_on_dicom import _classify_zone
+        
+        # Image height 1000, box center at 13% (would be BODY with default 15%)
+        # y + h/2 = 130
+        zone_default = _classify_zone(y=120, h=20, image_height=1000)
+        zone_us = _classify_zone(y=120, h=20, image_height=1000, modality="US")
+        
+        assert zone_default == "HEADER"  # 13% < 15%
+        # For US, 12% threshold means 13% is BODY
+        assert zone_us == "BODY"  # 13% > 12%
+    
+    def test_classify_zone_zero_height_defensive(self):
+        """Zero image height should return BODY (defensive)."""
+        from run_on_dicom import _classify_zone
+        
+        zone = _classify_zone(y=50, h=20, image_height=0)
+        assert zone == "BODY"
+    
+    def test_classify_all_zones_multiple_boxes(self):
+        """Should classify multiple boxes correctly."""
+        from run_on_dicom import _classify_all_zones
+        
+        boxes = [
+            (10, 50, 100, 20),   # Header (center at 60)
+            (10, 450, 100, 100),  # Body (center at 500)
+            (10, 920, 100, 40),   # Footer (center at 940)
+        ]
+        
+        zones = _classify_all_zones(boxes, image_height=1000)
+        
+        assert zones == ["HEADER", "BODY", "FOOTER"]
+    
+    def test_classify_all_zones_empty_list(self):
+        """Empty box list should return empty zones."""
+        from run_on_dicom import _classify_all_zones
+        
+        zones = _classify_all_zones([], image_height=1000)
+        assert zones == []
+    
+    def test_detection_result_includes_zones(self):
+        """DetectionResult should include zone classification."""
+        from run_on_dicom import DetectionResult
+        
+        result = DetectionResult(
+            static_box=(10, 50, 100, 20),
+            all_detected_boxes=[(10, 50, 100, 20), (10, 900, 100, 40)],
+            detection_strength="HIGH",
+            ocr_failure=False,
+            confidence_scores=[0.95, 0.92],
+            region_zones=["HEADER", "FOOTER"],
+            image_height=1000,
+        )
+        
+        assert result.region_zones == ["HEADER", "FOOTER"]
+        assert result.image_height == 1000
+    
+    def test_detection_result_zones_match_boxes_length(self):
+        """region_zones should have same length as all_detected_boxes."""
+        from run_on_dicom import DetectionResult, _classify_all_zones
+        
+        boxes = [(10, 50, 100, 20), (10, 450, 100, 100), (10, 920, 100, 40)]
+        zones = _classify_all_zones(boxes, image_height=1000)
+        
+        assert len(zones) == len(boxes)
+
+
+class TestZoneBandingGovernance:
+    """Verify Option B adheres to governance constraints."""
+    
+    def test_zone_thresholds_are_static(self):
+        """Zone thresholds must be static constants, not learned."""
+        from run_on_dicom import ZONE_HEADER_THRESHOLD, ZONE_FOOTER_THRESHOLD
+        
+        # Verify they're floats (not functions or callables)
+        assert isinstance(ZONE_HEADER_THRESHOLD, float)
+        assert isinstance(ZONE_FOOTER_THRESHOLD, float)
+        
+        # Verify documented values
+        assert ZONE_HEADER_THRESHOLD == 0.15
+        assert ZONE_FOOTER_THRESHOLD == 0.85
+    
+    def test_modality_thresholds_documented(self):
+        """Modality-specific thresholds must be documented."""
+        from run_on_dicom import MODALITY_ZONE_THRESHOLDS
+        
+        # US should have tighter bands
+        assert "US" in MODALITY_ZONE_THRESHOLDS
+        assert MODALITY_ZONE_THRESHOLDS["US"]["header"] == 0.12
+        assert MODALITY_ZONE_THRESHOLDS["US"]["footer"] == 0.88
+    
+    def test_zone_names_are_strings(self):
+        """Zone classifications must be plain strings, not enums."""
+        from run_on_dicom import _classify_zone
+        
+        # All possible zone outcomes
+        zone_header = _classify_zone(y=0, h=10, image_height=1000)
+        zone_footer = _classify_zone(y=950, h=10, image_height=1000)
+        zone_body = _classify_zone(y=500, h=10, image_height=1000)
+        
+        assert isinstance(zone_header, str)
+        assert isinstance(zone_footer, str)
+        assert isinstance(zone_body, str)
+        assert zone_header in ("HEADER", "FOOTER", "BODY")
+        assert zone_footer in ("HEADER", "FOOTER", "BODY")
+        assert zone_body in ("HEADER", "FOOTER", "BODY")

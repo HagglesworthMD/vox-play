@@ -194,6 +194,7 @@ class DecisionRecord:
     ocr_failure: Optional[bool] = None  # True = OCR engine threw exception
     confidence_aggregation: Optional[str] = None  # Aggregation method (e.g., "min")
     ocr_engine: Optional[str] = None  # OCR engine identifier (e.g., "PaddleOCR")
+    region_zone: Optional[str] = None  # Phase 4 Option B: HEADER, FOOTER, BODY
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
 
 
@@ -233,6 +234,7 @@ class DecisionTraceCollector:
         ocr_failure: bool = None,
         confidence_aggregation: str = None,
         ocr_engine: str = None,
+        region_zone: str = None,  # Phase 4 Option B
     ) -> None:
         """
         Add a decision record to the collector.
@@ -252,6 +254,7 @@ class DecisionTraceCollector:
             ocr_failure: Phase 4 - True if OCR engine threw exception
             confidence_aggregation: Phase 4 - Aggregation method (e.g., "min")
             ocr_engine: Phase 4 - OCR engine identifier (e.g., "PaddleOCR")
+            region_zone: Phase 4 Option B - HEADER, FOOTER, or BODY
             
         Raises:
             RuntimeError: If collector is locked (already committed)
@@ -277,6 +280,7 @@ class DecisionTraceCollector:
             ocr_failure=ocr_failure,
             confidence_aggregation=confidence_aggregation,
             ocr_engine=ocr_engine,
+            region_zone=region_zone,
         )
         self._decisions.append(record)
     
@@ -680,6 +684,8 @@ def record_region_decisions(
         confidence_aggregation = "min" if is_ocr else None
         # OCR engine identifier
         ocr_engine = "PaddleOCR" if is_ocr else None
+        # Phase 4 Option B: Zone classification
+        region_zone = getattr(region, 'region_zone', None) if is_ocr else None
         
         if final_action == RegionAction.MASK:
             # Determine reason code based on source and whether reviewer modified
@@ -713,6 +719,7 @@ def record_region_decisions(
                 ocr_failure=ocr_failure,
                 confidence_aggregation=confidence_aggregation,
                 ocr_engine=ocr_engine,
+                region_zone=region_zone,
             )
             count += 1
         
@@ -735,6 +742,7 @@ def record_region_decisions(
                 ocr_failure=ocr_failure,
                 confidence_aggregation=confidence_aggregation,
                 ocr_engine=ocr_engine,
+                region_zone=region_zone,
             )
             count += 1
     

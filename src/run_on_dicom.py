@@ -389,18 +389,111 @@ class DetectionResult:
     Phase 4: Surfaces OCR confidence and failure states explicitly.
     Detection-only — no masking or pixel behavior changes.
     
+    Phase 4 Option B: Includes zone classification for each detected box.
+    Zones are determined by vertical position (header/footer/body bands).
+    
     Attributes:
         static_box: Bounding box (x, y, w, h) of consistent text region, or None
         all_detected_boxes: List of all detected boxes across sampled frames
         detection_strength: LOW/MEDIUM/HIGH based on OCR confidence, or None if OCR failed
         ocr_failure: True if OCR engine threw an exception
         confidence_scores: Raw confidence scores for audit (may be empty)
+        region_zones: Zone classification for each box ("HEADER", "FOOTER", "BODY")
+        image_height: Image height used for zone calculation
     """
     static_box: tuple  # (x, y, w, h) or None
     all_detected_boxes: list  # List of (x, y, w, h)
     detection_strength: str  # "LOW", "MEDIUM", "HIGH", or None
     ocr_failure: bool  # True if OCR engine failed
     confidence_scores: list  # Raw scores for audit trail
+    # Phase 4 Option B: Zone classification
+    region_zones: list = None  # List of zone strings for each box
+    image_height: int = None  # Image height for zone calculations
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 4 OPTION B: STATIC HEADER/FOOTER BANDING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Default zone thresholds (percentage of image height)
+# Conservative: biases toward "risky" zones (header/footer)
+ZONE_HEADER_THRESHOLD = 0.15  # Top 15% = header
+ZONE_FOOTER_THRESHOLD = 0.85  # Bottom 15% = footer (y > 85% of height)
+
+# Modality-specific overrides (US/SC have tighter header zones)
+MODALITY_ZONE_THRESHOLDS = {
+    "US": {"header": 0.12, "footer": 0.88},  # Ultrasound: top 12%, bottom 12%
+    "SC": {"header": 0.15, "footer": 0.85},  # Secondary Capture: standard
+    "OT": {"header": 0.15, "footer": 0.85},  # Other: standard
+}
+
+
+def _classify_zone(y: int, h: int, image_height: int, modality: str = None) -> str:
+    """
+    Classify a detected region's zone based on vertical position.
+    
+    Phase 4 Option B: Static percentage banding.
+    
+    Uses center-of-box y coordinate for classification:
+    - HEADER: box center in top threshold% of image
+    - FOOTER: box center in bottom (1-threshold)% of image  
+    - BODY: everything else
+    
+    Args:
+        y: Top y coordinate of box
+        h: Height of box
+        image_height: Total image height in pixels
+        modality: Optional modality for modality-aware thresholds
+        
+    Returns:
+        Zone string: "HEADER", "FOOTER", or "BODY"
+    """
+    if image_height <= 0:
+        return "BODY"  # Defensive
+    
+    # Get thresholds (modality-specific or default)
+    if modality and modality.upper() in MODALITY_ZONE_THRESHOLDS:
+        thresholds = MODALITY_ZONE_THRESHOLDS[modality.upper()]
+        header_threshold = thresholds["header"]
+        footer_threshold = thresholds["footer"]
+    else:
+        header_threshold = ZONE_HEADER_THRESHOLD
+        footer_threshold = ZONE_FOOTER_THRESHOLD
+    
+    # Use center of box for classification
+    box_center_y = y + (h / 2)
+    relative_position = box_center_y / image_height
+    
+    if relative_position <= header_threshold:
+        return "HEADER"
+    elif relative_position >= footer_threshold:
+        return "FOOTER"
+    else:
+        return "BODY"
+
+
+def _classify_all_zones(boxes: list, image_height: int, modality: str = None) -> list:
+    """
+    Classify zones for all detected boxes.
+    
+    Args:
+        boxes: List of (x, y, w, h) tuples
+        image_height: Image height in pixels
+        modality: Optional modality for thresholds
+        
+    Returns:
+        List of zone strings, same length as boxes
+    """
+    zones = []
+    for box in boxes:
+        if len(box) == 4:
+            x, y, w, h = box
+            zones.append(_classify_zone(y, h, image_height, modality))
+        else:
+            zones.append("BODY")  # Defensive
+    return zones
+
+
 
 
 def _map_confidence_to_strength(confidence: float) -> str:
@@ -484,6 +577,9 @@ def detect_text_box_from_array(
     all_detected_boxes = []  # For debug output
     all_confidence_scores = []  # Phase 4: collect confidence
     ocr_failure_occurred = False  # Phase 4: track failures
+    
+    # Phase 4 Option B: Get image dimensions for zone classification
+    image_height = arr.shape[1] if len(arr.shape) >= 2 else 0
 
     for idx in sample_indices:
         frame = arr[idx]
@@ -568,12 +664,16 @@ def detect_text_box_from_array(
 
     # Find consistent (static) boxes
     if not all_boxes or not all_boxes[0]:
+        # Phase 4 Option B: Classify zones even when no static box found
+        region_zones = _classify_all_zones(all_detected_boxes, image_height)
         return DetectionResult(
             static_box=None,
             all_detected_boxes=all_detected_boxes,
             detection_strength=detection_strength,
             ocr_failure=ocr_failure_occurred,
             confidence_scores=all_confidence_scores,
+            region_zones=region_zones,
+            image_height=image_height,
         )
 
     reference_boxes = all_boxes[0]
@@ -593,20 +693,28 @@ def detect_text_box_from_array(
             static_box = ref_box
 
     if max_consistency >= len(all_boxes) // 2:
+        # Phase 4 Option B: Classify zones for all detected boxes
+        region_zones = _classify_all_zones(all_detected_boxes, image_height)
         return DetectionResult(
             static_box=static_box,
             all_detected_boxes=all_detected_boxes,
             detection_strength=detection_strength,
             ocr_failure=ocr_failure_occurred,
             confidence_scores=all_confidence_scores,
+            region_zones=region_zones,
+            image_height=image_height,
         )
 
+    # Phase 4 Option B: Classify zones for fallback path
+    region_zones = _classify_all_zones(all_detected_boxes, image_height)
     return DetectionResult(
         static_box=None,
         all_detected_boxes=all_detected_boxes,
         detection_strength=detection_strength,
         ocr_failure=ocr_failure_occurred,
         confidence_scores=all_confidence_scores,
+        region_zones=region_zones,
+        image_height=image_height,
     )
 
 

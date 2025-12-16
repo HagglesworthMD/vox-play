@@ -177,6 +177,8 @@ class ReviewRegion:
     
     Contains ONLY geometric and action state — never text content.
     This is enforced by design: there is no field for OCR text.
+    
+    Phase 4 Option B: Includes zone classification (HEADER/FOOTER/BODY).
     """
     region_id: str
     x: int
@@ -188,6 +190,7 @@ class ReviewRegion:
     reviewer_action: Optional[str] = None  # None, MASK, UNMASK, or DELETED
     detection_strength: Optional[str] = None  # LOW, MEDIUM, HIGH (for OCR)
     frame_index: int = -1  # -1 = all frames, >= 0 = specific frame
+    region_zone: Optional[str] = None  # Phase 4 Option B: HEADER, FOOTER, BODY
     
     @classmethod
     def create_ocr_region(
@@ -197,7 +200,8 @@ class ReviewRegion:
         w: int,
         h: int,
         detection_strength: Optional[str] = None,
-        frame_index: int = -1
+        frame_index: int = -1,
+        region_zone: Optional[str] = None,
     ) -> "ReviewRegion":
         """
         Create an OCR-detected region.
@@ -214,7 +218,8 @@ class ReviewRegion:
             default_action=RegionAction.MASK,
             reviewer_action=None,
             detection_strength=detection_strength,
-            frame_index=frame_index
+            frame_index=frame_index,
+            region_zone=region_zone,
         )
     
     @classmethod
@@ -360,14 +365,16 @@ class ReviewSession:
         w: int,
         h: int,
         detection_strength: Optional[str] = None,
-        frame_index: int = -1
+        frame_index: int = -1,
+        region_zone: Optional[str] = None,
     ) -> ReviewRegion:
         """Add an OCR-detected region."""
         self._check_not_sealed()
         region = ReviewRegion.create_ocr_region(
             x=x, y=y, w=w, h=h,
             detection_strength=detection_strength,
-            frame_index=frame_index
+            frame_index=frame_index,
+            region_zone=region_zone,
         )
         self.regions.append(region)
         return region
@@ -770,6 +777,7 @@ def populate_regions_from_detection(
     Populate ReviewSession with detected regions from OCR output.
     
     Phase 4: Wires detection_strength from OCR engine to review regions.
+    Phase 4 Option B: Also wires region_zone from zone classification.
     This is a plumbing function — no behavior change, purely data flow.
     
     Args:
@@ -799,10 +807,15 @@ def populate_regions_from_detection(
     # Get all detected boxes
     all_boxes = getattr(detection_result, 'all_detected_boxes', [])
     
+    # Phase 4 Option B: Get zone classifications
+    region_zones = getattr(detection_result, 'region_zones', None) or []
+    
     count = 0
-    for box in all_boxes:
+    for i, box in enumerate(all_boxes):
         if len(box) == 4:
             x, y, w, h = box
+            # Get zone for this box (if available)
+            zone = region_zones[i] if i < len(region_zones) else None
             session.add_ocr_region(
                 x=int(x),
                 y=int(y),
@@ -810,6 +823,7 @@ def populate_regions_from_detection(
                 h=int(h),
                 detection_strength=detection_strength,
                 frame_index=frame_index,
+                region_zone=zone,
             )
             count += 1
     

@@ -11,11 +11,19 @@ These tests ensure:
 - Counts are consistent across manifests
 
 Gate 3 "Audit Completeness" uses these checks to verify bundles.
+
+USAGE:
+    # Validate synthetic test bundle (default)
+    pytest tests/test_gate3_bundle_schema.py -v
+
+    # Validate a PRODUCED bundle (real processing output)
+    VM_EVIDENCE_BUNDLE_PATH=/path/to/EVIDENCE_xxx pytest tests/test_gate3_bundle_schema.py -v
 """
 
 import json
 import csv
 import hashlib
+import os
 import pytest
 import tempfile
 from pathlib import Path
@@ -75,111 +83,151 @@ MANIFEST_CONSTRAINT_FIELDS = [
     "pacs_authoritative",
 ]
 
+# PHI keys that MUST NOT appear in exception logs
+FORBIDDEN_PHI_KEYS = [
+    "PatientName", "PatientID", "patient_name", "patient_id",
+    "AccessionNumber", "accession_number", "accession",
+    "PatientBirthDate", "patient_dob", "birth_date",
+    "PatientAddress", "patient_address",
+    "ReferringPhysicianName", "referring_physician",
+    "InstitutionName", "institution_name",
+    "OperatorsName", "operator_name",
+]
+
+# PHI patterns (substrings) that should trigger warnings
+FORBIDDEN_PHI_PATTERNS = [
+    "DOE, JOHN", "SMITH, JANE",  # Common test names that might leak
+]
+
 
 # =============================================================================
 # Fixtures
 # =============================================================================
 
+def get_produced_bundle_path() -> Path | None:
+    """Check if VM_EVIDENCE_BUNDLE_PATH is set and valid."""
+    env_path = os.environ.get("VM_EVIDENCE_BUNDLE_PATH")
+    if env_path:
+        path = Path(env_path)
+        if path.exists() and path.is_dir():
+            return path
+        else:
+            raise ValueError(f"VM_EVIDENCE_BUNDLE_PATH={env_path} does not exist or is not a directory")
+    return None
+
+
 @pytest.fixture
 def empty_bundle() -> Path:
-    """Create an empty evidence bundle for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        bundle_path = create_empty_bundle(Path(tmpdir))
-        yield bundle_path
+    """Create an empty evidence bundle for testing, or use produced bundle."""
+    produced = get_produced_bundle_path()
+    if produced:
+        # Use produced bundle (no cleanup - it's externally managed)
+        yield produced
+    else:
+        # Create synthetic bundle
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle_path = create_empty_bundle(Path(tmpdir))
+            yield bundle_path
 
 
 @pytest.fixture
 def populated_bundle() -> Path:
-    """Create a populated evidence bundle for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        bundle = EvidenceBundle(
-            processing_run_id="test-run-001",
-            voxelmask_version="0.5.0",
-            compliance_profile="FOI"
-        )
-        
-        # Add source metadata
-        bundle.start_processing()
-        bundle.set_source_study("1.2.840.113564.test.study", "Test Study")
-        bundle.add_source_series(
-            series_uid="1.2.840.113564.test.series.1",
-            modality="US",
-            sop_class_uid="1.2.840.10008.5.1.4.1.1.6.1",
-            instance_count=3
-        )
-        
-        # Add source hashes
-        for i in range(1, 4):
-            bundle.add_source_hash(
-                sop_instance_uid=f"1.2.840.113564.test.instance.{i}",
-                pixel_hash=f"sha256:{'a' * 64}",
-                series_uid="1.2.840.113564.test.series.1",
-                instance_number=i
+    """Create a populated evidence bundle for testing, or use produced bundle."""
+    produced = get_produced_bundle_path()
+    if produced:
+        # Use produced bundle
+        yield produced
+    else:
+        # Create synthetic populated bundle
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = EvidenceBundle(
+                processing_run_id="test-run-001",
+                voxelmask_version="0.5.0",
+                compliance_profile="FOI"
             )
-        
-        # Add detections (NO PHI text stored)
-        bundle.add_detection(
-            source_sop_uid="1.2.840.113564.test.instance.1",
-            bbox=[10, 5, 200, 30],
-            confidence=0.92,
-            region="header",
-            engine="PaddleOCR",
-            engine_version="2.7.0",
-            ruleset_id="US_HEADER",
-            config_hash="sha256:config123"
-        )
-        
-        # Add masking actions
-        bundle.add_masking_action(
-            masked_sop_uid="2.25.masked.1",
-            action_type="black_box",
-            bbox_applied=[10, 5, 200, 30],
-            parameters={"color": [0, 0, 0], "padding": 2},
-            result="success"
-        )
-        
-        # Add masked outputs
-        bundle.add_masked_hash(
-            sop_instance_uid="2.25.masked.1",
-            pixel_hash="sha256:masked123",
-            series_uid="2.25.masked.series.1"
-        )
-        
-        # Add linkage
-        bundle.add_linkage(
-            source_study_uid="1.2.840.113564.test.study",
-            source_series_uid="1.2.840.113564.test.series.1",
-            source_sop_uid="1.2.840.113564.test.instance.1",
-            masked_study_uid="2.25.masked.study",
-            masked_series_uid="2.25.masked.series.1",
-            masked_sop_uid="2.25.masked.1"
-        )
-        
-        # Add decision
-        bundle.add_decision(
-            decision_type="MASK",
-            source_sop_uid="1.2.840.113564.test.instance.1",
-            masked_sop_uid="2.25.masked.1",
-            detections_count=1,
-            actions_count=1,
-            status="complete"
-        )
-        
-        # Set config
-        bundle.set_app_build(
-            version="0.5.0",
-            git_commit="abc123",
-            ocr_engine="PaddleOCR",
-            ocr_version="2.7.0"
-        )
-        bundle.set_runtime_env(
-            python_version="3.12.0",
-            platform="Linux"
-        )
-        
-        bundle.end_processing()
-        bundle_path = bundle.finalize(Path(tmpdir))
-        yield bundle_path
+            
+            # Add source metadata
+            bundle.start_processing()
+            bundle.set_source_study("1.2.840.113564.test.study", "Test Study")
+            bundle.add_source_series(
+                series_uid="1.2.840.113564.test.series.1",
+                modality="US",
+                sop_class_uid="1.2.840.10008.5.1.4.1.1.6.1",
+                instance_count=3
+            )
+            
+            # Add source hashes
+            for i in range(1, 4):
+                bundle.add_source_hash(
+                    sop_instance_uid=f"1.2.840.113564.test.instance.{i}",
+                    pixel_hash=f"sha256:{'a' * 64}",
+                    series_uid="1.2.840.113564.test.series.1",
+                    instance_number=i
+                )
+            
+            # Add detections (NO PHI text stored)
+            bundle.add_detection(
+                source_sop_uid="1.2.840.113564.test.instance.1",
+                bbox=[10, 5, 200, 30],
+                confidence=0.92,
+                region="header",
+                engine="PaddleOCR",
+                engine_version="2.7.0",
+                ruleset_id="US_HEADER",
+                config_hash="sha256:config123"
+            )
+            
+            # Add masking actions
+            bundle.add_masking_action(
+                masked_sop_uid="2.25.masked.1",
+                action_type="black_box",
+                bbox_applied=[10, 5, 200, 30],
+                parameters={"color": [0, 0, 0], "padding": 2},
+                result="success"
+            )
+            
+            # Add masked outputs
+            bundle.add_masked_hash(
+                sop_instance_uid="2.25.masked.1",
+                pixel_hash="sha256:masked123",
+                series_uid="2.25.masked.series.1"
+            )
+            
+            # Add linkage
+            bundle.add_linkage(
+                source_study_uid="1.2.840.113564.test.study",
+                source_series_uid="1.2.840.113564.test.series.1",
+                source_sop_uid="1.2.840.113564.test.instance.1",
+                masked_study_uid="2.25.masked.study",
+                masked_series_uid="2.25.masked.series.1",
+                masked_sop_uid="2.25.masked.1"
+            )
+            
+            # Add decision
+            bundle.add_decision(
+                decision_type="MASK",
+                source_sop_uid="1.2.840.113564.test.instance.1",
+                masked_sop_uid="2.25.masked.1",
+                detections_count=1,
+                actions_count=1,
+                status="complete"
+            )
+            
+            # Set config
+            bundle.set_app_build(
+                version="0.5.0",
+                git_commit="abc123",
+                ocr_engine="PaddleOCR",
+                ocr_version="2.7.0"
+            )
+            bundle.set_runtime_env(
+                python_version="3.12.0",
+                platform="Linux"
+            )
+            
+            bundle.end_processing()
+            bundle_path = bundle.finalize(Path(tmpdir))
+            yield bundle_path
 
 
 # =============================================================================
@@ -368,6 +416,64 @@ class TestModelBConstraints:
         
         content = hashes_path.read_text()
         assert "source_pixel_hash" in content or "sha256" in content
+
+
+# =============================================================================
+# PHI Guardrail Tests (Security)
+# =============================================================================
+
+class TestPHIGuardrails:
+    """Tests that PHI is not accidentally stored in evidence files."""
+    
+    def test_exceptions_no_phi_keys(self, populated_bundle: Path):
+        """Exception records must not contain forbidden PHI keys."""
+        exceptions_path = populated_bundle / "QA" / "exceptions.jsonl"
+        content = exceptions_path.read_text().strip()
+        
+        violations = []
+        if content:
+            for line_num, line in enumerate(content.split("\n"), 1):
+                if line:
+                    try:
+                        record = json.loads(line)
+                        for key in record.keys():
+                            if key in FORBIDDEN_PHI_KEYS:
+                                violations.append(f"Line {line_num}: forbidden key '{key}'")
+                    except json.JSONDecodeError:
+                        violations.append(f"Line {line_num}: invalid JSON")
+        
+        assert len(violations) == 0, f"PHI key violations in exceptions: {violations}"
+    
+    def test_exceptions_no_phi_values(self, populated_bundle: Path):
+        """Exception message content should not contain obvious PHI patterns."""
+        exceptions_path = populated_bundle / "QA" / "exceptions.jsonl"
+        content = exceptions_path.read_text()
+        
+        warnings = []
+        for pattern in FORBIDDEN_PHI_PATTERNS:
+            if pattern.lower() in content.lower():
+                warnings.append(f"Found PHI pattern '{pattern}' in exceptions.jsonl")
+        
+        assert len(warnings) == 0, f"PHI pattern warnings: {warnings}"
+    
+    def test_decision_log_no_phi_keys(self, populated_bundle: Path):
+        """Decision log must not contain forbidden PHI keys."""
+        decision_path = populated_bundle / "DECISIONS" / "decision_log.jsonl"
+        content = decision_path.read_text().strip()
+        
+        violations = []
+        if content:
+            for line_num, line in enumerate(content.split("\n"), 1):
+                if line:
+                    try:
+                        record = json.loads(line)
+                        for key in record.keys():
+                            if key in FORBIDDEN_PHI_KEYS:
+                                violations.append(f"Line {line_num}: forbidden key '{key}'")
+                    except json.JSONDecodeError:
+                        violations.append(f"Line {line_num}: invalid JSON")
+        
+        assert len(violations) == 0, f"PHI key violations in decision_log: {violations}"
 
 
 # =============================================================================

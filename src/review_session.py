@@ -89,6 +89,8 @@ class ReviewFinding:
     finding_type: str  # FindingType.SECONDARY_CAPTURE or FindingType.ENCAPSULATED_PDF
     modality: Optional[str]  # DICOM Modality tag value (e.g., "SC", "DOC")
     description: str  # Human-readable description
+    excluded: bool = False  # User-driven exclusion flag (default: included)
+    excluded_at: Optional[str] = None  # UTC timestamp when exclusion was set
     
     @classmethod
     def from_sop_class(
@@ -146,7 +148,22 @@ class ReviewFinding:
             "finding_type": self.finding_type,
             "modality": self.modality,
             "description": self.description,
+            "excluded": self.excluded,
+            "excluded_at": self.excluded_at,
         }
+    
+    def set_excluded(self, excluded: bool) -> None:
+        """
+        Set the exclusion state for this finding.
+        
+        Args:
+            excluded: True to exclude from export, False to include
+        """
+        self.excluded = excluded
+        if excluded:
+            self.excluded_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        else:
+            self.excluded_at = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -301,6 +318,8 @@ class ReviewSession:
     Attributes:
         review_findings: List of ReviewFinding objects from preflight scan.
                          These are informational records and do NOT affect processing.
+        file_uid_mapping: Deterministic mapping of filename → SOPInstanceUID.
+                         Populated once at preflight scan time, used for export filtering.
     """
     session_id: str
     sop_instance_uid: str
@@ -309,6 +328,7 @@ class ReviewSession:
     review_accepted: bool
     created_at: str
     review_findings: List[ReviewFinding] = field(default_factory=list)
+    file_uid_mapping: Dict[str, str] = field(default_factory=dict)  # filename → SOPInstanceUID
     
     @classmethod
     def create(cls, sop_instance_uid: str) -> "ReviewSession":
@@ -321,6 +341,7 @@ class ReviewSession:
             review_accepted=False,
             created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             review_findings=[],
+            file_uid_mapping={},
         )
     
     def _check_not_sealed(self) -> None:
@@ -533,11 +554,131 @@ class ReviewSession:
         Returns:
             Dictionary with finding type counts
         """
+        pdf_findings = self.get_findings_by_type(FindingType.ENCAPSULATED_PDF)
         return {
             "total_findings": len(self.review_findings),
             "secondary_capture": len(self.get_findings_by_type(FindingType.SECONDARY_CAPTURE)),
-            "encapsulated_pdf": len(self.get_findings_by_type(FindingType.ENCAPSULATED_PDF)),
+            "encapsulated_pdf": len(pdf_findings),
+            "excluded_pdf": len([f for f in pdf_findings if f.excluded]),
         }
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PDF EXCLUSION (User-Driven, Logged)
+    # Phase 2: Manual exclusion of Encapsulated PDFs from export
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def set_pdf_excluded(self, sop_instance_uid: str, excluded: bool) -> bool:
+        """
+        Set exclusion state for an Encapsulated PDF finding.
+        
+        This is a user-driven action that marks a PDF for exclusion from export.
+        The PDF is NOT deleted — it simply won't be included in the export manifest.
+        
+        This method can be called until the session is sealed (accept).
+        
+        Args:
+            sop_instance_uid: SOP Instance UID of the PDF to exclude/include
+            excluded: True to exclude from export, False to include
+            
+        Returns:
+            True if the finding was found and updated, False otherwise
+        """
+        # Allow modification until sealed
+        if self.is_sealed():
+            return False
+        
+        for finding in self.review_findings:
+            if (finding.sop_instance_uid == sop_instance_uid and 
+                finding.finding_type == FindingType.ENCAPSULATED_PDF):
+                finding.set_excluded(excluded)
+                return True
+        return False
+    
+    def get_excluded_pdf_uids(self) -> List[str]:
+        """
+        Get SOP Instance UIDs of all excluded PDFs.
+        
+        These UIDs should be filtered from the export manifest.
+        
+        Returns:
+            List of SOP Instance UIDs marked for exclusion
+        """
+        return [
+            f.sop_instance_uid 
+            for f in self.review_findings 
+            if f.finding_type == FindingType.ENCAPSULATED_PDF and f.excluded
+        ]
+    
+    def get_pdf_findings(self) -> List[ReviewFinding]:
+        """
+        Get all Encapsulated PDF findings.
+        
+        Returns:
+            List of PDF findings (both excluded and included)
+        """
+        return self.get_findings_by_type(FindingType.ENCAPSULATED_PDF)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # FILE UID MAPPING (Deterministic, Hardened)
+    # Phase 2 Safety: Reliable filename ↔ SOPInstanceUID resolution
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def register_file_uid(self, filename: str, sop_instance_uid: str, sop_class_uid: str) -> None:
+        """
+        Register a deterministic mapping from filename to SOP Instance UID.
+        
+        This is called ONCE during preflight scan when the dataset is read.
+        The mapping is used later for reliable export filtering.
+        
+        Args:
+            filename: The file name (not path) to register
+            sop_instance_uid: The SOP Instance UID from the DICOM dataset
+            sop_class_uid: The SOP Class UID for type verification
+        """
+        # Store as tuple (sop_instance_uid, sop_class_uid) for verification
+        self.file_uid_mapping[filename] = (sop_instance_uid, sop_class_uid)
+    
+    def get_excluded_filenames(self) -> List[str]:
+        """
+        Get filenames of files that should be excluded from export.
+        
+        Uses the stored deterministic mapping to resolve SOP Instance UIDs
+        to filenames. Only Encapsulated PDFs can be excluded.
+        
+        Returns:
+            List of filenames to exclude from export manifest
+        """
+        excluded_uids = set(self.get_excluded_pdf_uids())
+        if not excluded_uids:
+            return []
+        
+        result = []
+        for filename, (sop_uid, sop_class) in self.file_uid_mapping.items():
+            # Only exclude if:
+            # 1. UID matches an excluded PDF
+            # 2. SOP Class confirms it's an Encapsulated PDF (safety check)
+            if (sop_uid in excluded_uids and 
+                sop_class == SOP_CLASS_UIDS["ENCAPSULATED_PDF"]):
+                result.append(filename)
+        
+        return result
+    
+    def get_sop_uid_for_file(self, filename: str) -> Optional[str]:
+        """
+        Get the SOP Instance UID for a registered filename.
+        
+        Args:
+            filename: The file name to look up
+            
+        Returns:
+            SOP Instance UID if found, None otherwise
+        """
+        mapping = self.file_uid_mapping.get(filename)
+        return mapping[0] if mapping else None
+    
+    def has_file_uid_mapping(self) -> bool:
+        """Check if any file UID mappings have been registered."""
+        return len(self.file_uid_mapping) > 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

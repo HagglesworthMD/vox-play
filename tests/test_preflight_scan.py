@@ -781,5 +781,449 @@ class TestAppIntegrationWorkflow:
         assert scan_errors == 1  # Only the None raised
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PDF EXCLUSION TESTS
+# Phase 2: User-driven exclusion of Encapsulated PDFs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPDFExclusion:
+    """Tests for manual PDF exclusion functionality."""
+    
+    def test_pdf_finding_default_not_excluded(self, encapsulated_pdf_dataset):
+        """PDF findings should be included by default."""
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        
+        assert finding is not None
+        assert finding.excluded is False
+        assert finding.excluded_at is None
+    
+    def test_set_excluded_on_finding(self, encapsulated_pdf_dataset):
+        """Should be able to set exclusion state on a finding."""
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        
+        finding.set_excluded(True)
+        
+        assert finding.excluded is True
+        assert finding.excluded_at is not None
+        # Timestamp should be in ISO format with Z suffix
+        assert finding.excluded_at.endswith("Z")
+    
+    def test_set_excluded_clears_timestamp_on_include(self, encapsulated_pdf_dataset):
+        """Re-including should clear the exclusion timestamp."""
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        
+        finding.set_excluded(True)
+        assert finding.excluded_at is not None
+        
+        finding.set_excluded(False)
+        assert finding.excluded is False
+        assert finding.excluded_at is None
+    
+    def test_session_set_pdf_excluded(self, encapsulated_pdf_dataset):
+        """Session should be able to set PDF exclusion by UID."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(finding)
+        
+        # Exclude the PDF
+        result = session.set_pdf_excluded(finding.sop_instance_uid, True)
+        
+        assert result is True
+        assert finding.excluded is True
+    
+    def test_session_set_pdf_excluded_returns_false_for_unknown_uid(self, encapsulated_pdf_dataset):
+        """Should return False if UID not found."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(finding)
+        
+        result = session.set_pdf_excluded("UNKNOWN_UID", True)
+        
+        assert result is False
+    
+    def test_session_set_pdf_excluded_blocked_after_seal(self, encapsulated_pdf_dataset):
+        """Should not allow exclusion changes after session is sealed."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(finding)
+        session.start_review()
+        session.accept()  # Seal the session
+        
+        result = session.set_pdf_excluded(finding.sop_instance_uid, True)
+        
+        assert result is False
+        assert finding.excluded is False  # Should remain unchanged
+    
+    def test_get_excluded_pdf_uids(self, encapsulated_pdf_dataset):
+        """Should return list of excluded PDF UIDs."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        
+        # Add multiple PDF findings
+        pdf1 = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(pdf1)
+        
+        # Create second PDF with different UID
+        ds2 = Dataset()
+        ds2.SOPClassUID = SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        ds2.SOPInstanceUID = "1.2.3.999.888.777"
+        ds2.SeriesInstanceUID = "1.2.3.999.888"
+        ds2.Modality = "DOC"
+        pdf2 = preflight_scan_dataset(ds2)
+        session.add_finding(pdf2)
+        
+        # Exclude only the first PDF
+        session.set_pdf_excluded(pdf1.sop_instance_uid, True)
+        
+        excluded_uids = session.get_excluded_pdf_uids()
+        
+        assert len(excluded_uids) == 1
+        assert pdf1.sop_instance_uid in excluded_uids
+        assert pdf2.sop_instance_uid not in excluded_uids
+    
+    def test_get_pdf_findings(self, encapsulated_pdf_dataset, secondary_capture_dataset):
+        """Should return only PDF findings, not SC."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_finding(preflight_scan_dataset(encapsulated_pdf_dataset))
+        session.add_finding(preflight_scan_dataset(secondary_capture_dataset))
+        
+        pdf_findings = session.get_pdf_findings()
+        
+        assert len(pdf_findings) == 1
+        assert pdf_findings[0].finding_type == FindingType.ENCAPSULATED_PDF
+    
+    def test_exclusion_does_not_affect_sc_findings(self, secondary_capture_dataset):
+        """SC findings should not be affected by PDF exclusion logic."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        sc_finding = preflight_scan_dataset(secondary_capture_dataset)
+        session.add_finding(sc_finding)
+        
+        # Try to exclude SC as if it were a PDF (should fail)
+        result = session.set_pdf_excluded(sc_finding.sop_instance_uid, True)
+        
+        assert result is False
+        assert sc_finding.excluded is False
+    
+    def test_findings_summary_includes_excluded_count(self, encapsulated_pdf_dataset):
+        """Summary should include count of excluded PDFs."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        pdf = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(pdf)
+        session.set_pdf_excluded(pdf.sop_instance_uid, True)
+        
+        summary = session.get_findings_summary()
+        
+        assert summary["encapsulated_pdf"] == 1
+        assert summary["excluded_pdf"] == 1
+    
+    def test_to_dict_includes_exclusion_state(self, encapsulated_pdf_dataset):
+        """to_dict should include exclusion fields."""
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        finding.set_excluded(True)
+        
+        d = finding.to_dict()
+        
+        assert "excluded" in d
+        assert "excluded_at" in d
+        assert d["excluded"] is True
+        assert d["excluded_at"] is not None
+
+
+class TestPDFExclusionDoesNotAffectProcessing:
+    """
+    Critical tests to verify PDF exclusion does NOT affect:
+    - Masking decisions
+    - Region detection
+    - Accept gating
+    - Anonymisation outputs
+    """
+    
+    def test_exclusion_does_not_affect_region_counts(self, encapsulated_pdf_dataset):
+        """Excluding PDFs should not change region counts."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=50, y=100, w=400, h=80)
+        session.add_manual_region(x=200, y=300, w=150, h=40)
+        
+        regions_before = len(session.get_regions())
+        
+        # Add and exclude PDF
+        pdf = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(pdf)
+        session.set_pdf_excluded(pdf.sop_instance_uid, True)
+        
+        regions_after = len(session.get_regions())
+        
+        assert regions_before == regions_after == 2
+    
+    def test_exclusion_does_not_affect_masked_regions(self, encapsulated_pdf_dataset):
+        """Excluding PDFs should not change which regions will be masked."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        session.add_ocr_region(x=50, y=100, w=400, h=80)
+        
+        masked_before = len(session.get_masked_regions())
+        
+        pdf = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(pdf)
+        session.set_pdf_excluded(pdf.sop_instance_uid, True)
+        
+        masked_after = len(session.get_masked_regions())
+        
+        assert masked_before == masked_after
+    
+    def test_exclusion_does_not_affect_accept_gating(self, encapsulated_pdf_dataset):
+        """PDF exclusion should not change accept gating behavior."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        pdf = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(pdf)
+        session.set_pdf_excluded(pdf.sop_instance_uid, True)
+        
+        # Verify gating still works normally
+        assert not session.can_accept()
+        
+        session.start_review()
+        assert session.can_accept()
+        
+        session.accept()
+        assert session.is_sealed()
+    
+    def test_exclusion_reversible_before_seal(self, encapsulated_pdf_dataset):
+        """Exclusion should be reversible until session is sealed."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        pdf = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(pdf)
+        
+        # Exclude
+        session.set_pdf_excluded(pdf.sop_instance_uid, True)
+        assert pdf.excluded is True
+        
+        # Re-include
+        session.set_pdf_excluded(pdf.sop_instance_uid, False)
+        assert pdf.excluded is False
+        
+        # Seal
+        session.start_review()
+        session.accept()
+        
+        # Now changes should be blocked
+        result = session.set_pdf_excluded(pdf.sop_instance_uid, True)
+        assert result is False
+        assert pdf.excluded is False  # Still included
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DETERMINISTIC FILE UID MAPPING TESTS
+# Phase 2 Hardening: Reliable filename ↔ SOPInstanceUID resolution
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestFileUIDMapping:
+    """Tests for deterministic file-to-UID mapping."""
+    
+    def test_register_file_uid(self):
+        """Should register filename to UID mapping."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        
+        session.register_file_uid(
+            filename="test.dcm",
+            sop_instance_uid="1.2.840.999.1",
+            sop_class_uid="1.2.840.10008.5.1.4.1.1.1"  # CT
+        )
+        
+        assert session.has_file_uid_mapping()
+        assert session.get_sop_uid_for_file("test.dcm") == "1.2.840.999.1"
+    
+    def test_get_sop_uid_for_unknown_file(self):
+        """Should return None for unknown filename."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        
+        result = session.get_sop_uid_for_file("unknown.dcm")
+        
+        assert result is None
+    
+    def test_get_excluded_filenames_empty_when_no_exclusions(self, encapsulated_pdf_dataset):
+        """Should return empty list when no PDFs are excluded."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(finding)
+        session.register_file_uid(
+            filename="pdf.dcm",
+            sop_instance_uid=finding.sop_instance_uid,
+            sop_class_uid=SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        )
+        
+        # Not excluded yet
+        excluded = session.get_excluded_filenames()
+        
+        assert excluded == []
+    
+    def test_get_excluded_filenames_returns_correct_file(self, encapsulated_pdf_dataset):
+        """Should return correct filename when PDF is excluded."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(finding)
+        session.register_file_uid(
+            filename="report.dcm",
+            sop_instance_uid=finding.sop_instance_uid,
+            sop_class_uid=SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        )
+        
+        # Exclude the PDF
+        session.set_pdf_excluded(finding.sop_instance_uid, True)
+        excluded = session.get_excluded_filenames()
+        
+        assert excluded == ["report.dcm"]
+    
+    def test_cannot_exclude_non_pdf_via_mapping(self, secondary_capture_dataset):
+        """Non-PDF files should NEVER appear in excluded filenames."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        sc_finding = preflight_scan_dataset(secondary_capture_dataset)
+        session.add_finding(sc_finding)
+        
+        # Register SC file
+        session.register_file_uid(
+            filename="secondary.dcm",
+            sop_instance_uid=sc_finding.sop_instance_uid,
+            sop_class_uid=SOP_CLASS_UIDS["SECONDARY_CAPTURE"]  # NOT PDF
+        )
+        
+        # Try to exclude SC (should fail)
+        result = session.set_pdf_excluded(sc_finding.sop_instance_uid, True)
+        assert result is False
+        
+        # Verify SC does NOT appear in excluded filenames
+        excluded = session.get_excluded_filenames()
+        assert excluded == []
+        assert "secondary.dcm" not in excluded
+    
+    def test_mapping_stable_across_operations(self, encapsulated_pdf_dataset):
+        """Mapping should remain stable across session operations."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(finding)
+        session.register_file_uid(
+            filename="stable.dcm",
+            sop_instance_uid=finding.sop_instance_uid,
+            sop_class_uid=SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        )
+        
+        # Toggle exclusion multiple times
+        session.set_pdf_excluded(finding.sop_instance_uid, True)
+        assert session.get_excluded_filenames() == ["stable.dcm"]
+        
+        session.set_pdf_excluded(finding.sop_instance_uid, False)
+        assert session.get_excluded_filenames() == []
+        
+        session.set_pdf_excluded(finding.sop_instance_uid, True)
+        assert session.get_excluded_filenames() == ["stable.dcm"]
+        
+        # Add regions and start review
+        session.add_ocr_region(x=10, y=20, w=100, h=50)
+        session.start_review()
+        
+        # Mapping still works
+        assert session.get_excluded_filenames() == ["stable.dcm"]
+    
+    def test_only_pdf_with_matching_sop_class_excluded(self):
+        """Only files with PDF SOP Class should be excluded."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        
+        # Create PDF finding
+        ds = Dataset()
+        ds.SOPClassUID = SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        ds.SOPInstanceUID = "1.2.3.999.PDF"
+        ds.SeriesInstanceUID = "1.2.3.999"
+        ds.Modality = "DOC"
+        pdf_finding = preflight_scan_dataset(ds)
+        session.add_finding(pdf_finding)
+        
+        # Register two files - one PDF, one NOT
+        session.register_file_uid(
+            filename="real_pdf.dcm",
+            sop_instance_uid="1.2.3.999.PDF",
+            sop_class_uid=SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        )
+        session.register_file_uid(
+            filename="not_pdf.dcm",
+            sop_instance_uid="1.2.3.999.PDF",  # Same UID but wrong SOP Class!
+            sop_class_uid="1.2.840.10008.5.1.4.1.1.1"  # CT
+        )
+        
+        # Exclude the PDF UID
+        session.set_pdf_excluded("1.2.3.999.PDF", True)
+        excluded = session.get_excluded_filenames()
+        
+        # Only the file with PDF SOP Class should be excluded
+        assert "real_pdf.dcm" in excluded
+        assert "not_pdf.dcm" not in excluded
+    
+    def test_multiple_pdfs_independent_exclusion(self):
+        """Multiple PDFs can be excluded independently."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        
+        # Create two PDF findings
+        ds1 = Dataset()
+        ds1.SOPClassUID = SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        ds1.SOPInstanceUID = "1.2.3.PDF1"
+        ds1.SeriesInstanceUID = "1.2.3"
+        ds1.Modality = "DOC"
+        
+        ds2 = Dataset()
+        ds2.SOPClassUID = SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        ds2.SOPInstanceUID = "1.2.3.PDF2"
+        ds2.SeriesInstanceUID = "1.2.3"
+        ds2.Modality = "DOC"
+        
+        session.add_finding(preflight_scan_dataset(ds1))
+        session.add_finding(preflight_scan_dataset(ds2))
+        
+        session.register_file_uid("pdf1.dcm", "1.2.3.PDF1", SOP_CLASS_UIDS["ENCAPSULATED_PDF"])
+        session.register_file_uid("pdf2.dcm", "1.2.3.PDF2", SOP_CLASS_UIDS["ENCAPSULATED_PDF"])
+        
+        # Exclude only first PDF
+        session.set_pdf_excluded("1.2.3.PDF1", True)
+        
+        excluded = session.get_excluded_filenames()
+        assert "pdf1.dcm" in excluded
+        assert "pdf2.dcm" not in excluded
+        assert len(excluded) == 1
+
+
+class TestMappingStabilityAcrossReruns:
+    """
+    Tests to verify mapping remains stable across simulated Streamlit reruns.
+    This is critical for UI reliability.
+    """
+    
+    def test_mapping_survives_session_object_reuse(self, encapsulated_pdf_dataset):
+        """Mapping should persist in session object across operations."""
+        # Simulates a Streamlit session_state scenario
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        
+        # First "run" - register mapping
+        finding = preflight_scan_dataset(encapsulated_pdf_dataset)
+        session.add_finding(finding)
+        session.register_file_uid(
+            "persistent.dcm",
+            finding.sop_instance_uid,
+            SOP_CLASS_UIDS["ENCAPSULATED_PDF"]
+        )
+        
+        # "Rerun 1" - check mapping still there
+        assert session.has_file_uid_mapping()
+        assert session.get_sop_uid_for_file("persistent.dcm") == finding.sop_instance_uid
+        
+        # "Rerun 2" - exclude and verify
+        session.set_pdf_excluded(finding.sop_instance_uid, True)
+        assert session.get_excluded_filenames() == ["persistent.dcm"]
+        
+        # "Rerun 3" - still correct
+        assert session.get_excluded_filenames() == ["persistent.dcm"]
+    
+    def test_new_session_has_empty_mapping(self):
+        """New session should have no file mappings."""
+        session = ReviewSession.create(sop_instance_uid="1.2.3.4.5")
+        
+        assert not session.has_file_uid_mapping()
+        assert session.get_excluded_filenames() == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

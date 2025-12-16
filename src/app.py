@@ -2254,6 +2254,7 @@ if st.session_state.get('uploaded_dicom_files'):
             # This is a passive, read-only scan that does NOT affect processing.
             # Findings are stored for potential future review UI.
             # Freeze-safe: informational only; no gating; no export changes.
+            # Phase 2 Hardening: Register deterministic filename → UID mapping
             # ═══════════════════════════════════════════════════════════════════
             try:
                 for f in preview_files:
@@ -2262,6 +2263,18 @@ if st.session_state.get('uploaded_dicom_files'):
                     if ftemp_path and os.path.exists(ftemp_path):
                         try:
                             scan_ds = pydicom.dcmread(ftemp_path, force=True, stop_before_pixels=True)
+                            
+                            # Register deterministic file → UID mapping
+                            sop_uid = str(getattr(scan_ds, 'SOPInstanceUID', ''))
+                            sop_class = str(getattr(scan_ds, 'SOPClassUID', ''))
+                            if sop_uid and sop_class:
+                                st.session_state.phi_review_session.register_file_uid(
+                                    filename=f.name,
+                                    sop_instance_uid=sop_uid,
+                                    sop_class_uid=sop_class
+                                )
+                            
+                            # Preflight scan for findings
                             finding = preflight_scan_dataset(scan_ds)
                             if finding is not None:
                                 st.session_state.phi_review_session.add_finding(finding)
@@ -2326,6 +2339,65 @@ if st.session_state.get('uploaded_dicom_files'):
                     "Both may contain unmasked PHI. "
                     "This warning is informational only and does not change masking or export.*"
                 )
+                
+                # ═══════════════════════════════════════════════════════════════
+                # PDF EXCLUSION CONTROLS (Phase 2: User-Driven, Logged)
+                # Allows operator to exclude Encapsulated PDFs from export
+                # ═══════════════════════════════════════════════════════════════
+                pdf_findings = review_session.get_pdf_findings()
+                if pdf_findings and not review_session.is_sealed():
+                    st.markdown("---")
+                    st.markdown("**📄 Encapsulated PDF Management:**")
+                    st.caption("Exclude PDFs from export. This action is logged for audit purposes.")
+                    
+                    for idx, pdf in enumerate(pdf_findings):
+                        # Create unique key for checkbox
+                        checkbox_key = f"exclude_pdf_{pdf.sop_instance_uid[:20]}_{idx}"
+                        
+                        # Display checkbox with current state
+                        exclude_label = f"Exclude PDF (SOP: ...{pdf.sop_instance_uid[-12:]})"
+                        current_excluded = pdf.excluded
+                        
+                        new_excluded = st.checkbox(
+                            exclude_label,
+                            value=current_excluded,
+                            key=checkbox_key,
+                            help=f"Series: {pdf.series_instance_uid[:20]}... | Modality: {pdf.modality or 'Unknown'}"
+                        )
+                        
+                        # Handle state change with audit logging
+                        if new_excluded != current_excluded:
+                            review_session.set_pdf_excluded(pdf.sop_instance_uid, new_excluded)
+                            
+                            # Audit log the decision
+                            try:
+                                from audit_manager import AuditLogger
+                                audit_logger = AuditLogger()
+                                audit_logger.log_scrub_event(
+                                    operator_id=st.session_state.get('operator_id', 'OPERATOR'),
+                                    original_filename=f"PDF_{pdf.sop_instance_uid}",
+                                    scrub_uuid=audit_logger.generate_scrub_uuid(),
+                                    reason_code="EXCLUDE_ENCAPSULATED_PDF" if new_excluded else "INCLUDE_ENCAPSULATED_PDF",
+                                    output_filename=None,
+                                    modality=pdf.modality or "DOC",
+                                    success=True
+                                )
+                            except Exception:
+                                pass  # Audit logging failure is non-fatal
+                            
+                            st.rerun()
+                    
+                    # Show exclusion summary
+                    excluded_count = len(review_session.get_excluded_pdf_uids())
+                    if excluded_count > 0:
+                        st.info(f"📋 **{excluded_count}** PDF{'s' if excluded_count > 1 else ''} marked for exclusion from export.")
+                
+                elif pdf_findings and review_session.is_sealed():
+                    # Show read-only status after seal
+                    excluded_count = len(review_session.get_excluded_pdf_uids())
+                    if excluded_count > 0:
+                        st.markdown("---")
+                        st.success(f"✅ **{excluded_count}** Encapsulated PDF{'s' if excluded_count > 1 else ''} excluded from export (locked).")
             
             # ═══════════════════════════════════════════════════════════════════
             # BULK ACTIONS (PR 4)
@@ -2708,6 +2780,25 @@ if st.session_state.get('uploaded_dicom_files'):
         for fb in bucket_skip:
             if fb.name in selected_filenames:
                 all_files.append(fb)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PDF EXCLUSION: Filter out user-excluded Encapsulated PDFs from export
+    # Phase 2: User-driven exclusion - does NOT affect masking or anonymisation
+    # Phase 2 Hardening: Uses deterministic filename → UID mapping (no re-reading)
+    # ═══════════════════════════════════════════════════════════════════════════
+    review_session = st.session_state.get('phi_review_session')
+    if review_session and review_session.has_file_uid_mapping():
+        # Get filenames to exclude using the stored deterministic mapping
+        excluded_filenames = set(review_session.get_excluded_filenames())
+        
+        if excluded_filenames:
+            # Filter out excluded files by filename (reliable, no re-reading)
+            filtered_files = [fb for fb in all_files if fb.name not in excluded_filenames]
+            excluded_count = len(all_files) - len(filtered_files)
+            all_files = filtered_files
+            
+            if excluded_count > 0:
+                st.info(f"📋 **{excluded_count}** Encapsulated PDF{'s' if excluded_count > 1 else ''} excluded from export (user selection).")
     
     if len(all_files) == 0:
         st.warning("⚠️ No files selected for processing. Please check the boxes above to select files.")

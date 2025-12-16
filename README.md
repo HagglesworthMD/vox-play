@@ -1,4 +1,4 @@
-# Voxelmask.io - Intelligent DICOM De-Identification Engine
+# Voxelmask.io - DICOM De-Identification Support Tool
 
 ![Build Status](https://github.com/HagglesworthMD/VOXELMASK/actions/workflows/test.yml/badge.svg)
 
@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <em>A comprehensive web-based DICOM de-identification workstation for medical imaging workflows</em>
+  <em>A web-based DICOM de-identification support workstation for medical imaging workflows</em>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 ## 🛡️ Overview
 
-Voxelmask.io is a professional-grade DICOM processing platform designed for healthcare organizations, research institutions, AI/ML companies, and legal departments. It provides intelligent, modality-aware de-identification with full audit trail capabilities and multi-jurisdictional compliance support.
+Voxelmask.io is a PACS-adjacent, non-clinical DICOM processing platform designed to support governance-aligned de-identification workflows for research institutions, FOI/legal teams, and healthcare organizations. It provides modality-aware de-identification support with full audit trail capabilities and operator-controlled review.
 
 ### Core Operating Modes
 
@@ -241,7 +241,7 @@ Simply export/download a ZIP from your viewing software (Horos, OsiriX, RadiAnt,
 
 - 🖥️ **Web-Based Interface** - Modern Streamlit UI with dark theme
 - 🛡️ **Multi-Compliance Engine** - HIPAA, OAIC (Australia), and custom profiles
-- 🔍 **Smart Pixel Masking** - Modality-aware burned-in PHI masking (click-and-drag)
+- 🔍 **Operator-Controlled Pixel Masking** - Modality-aware burned-in text detection with manual review
 - 📋 **Professional Audit Trail** - PDF reports with SHA-256 verification
 - 📦 **Batch Processing** - Single files, multi-file uploads, and ZIP archives
 - 🎯 **Interactive Redaction** - Click-and-drag canvas for manual PHI masking
@@ -765,7 +765,7 @@ Voxelmask.io/
 │   ├── app.py                    # Main Streamlit application
 │   ├── foi_engine.py             # FOI processing (Legal/Patient)
 │   ├── compliance_engine.py      # Multi-profile compliance manager
-│   ├── clinical_corrector.py     # OCR-based PHI detection
+│   ├── clinical_corrector.py     # OCR-assisted text detection (operator review required)
 │   ├── run_on_dicom.py           # Core DICOM processing pipeline
 │   ├── nifti_handler.py          # NIfTI conversion
 │   ├── pdf_reporter.py           # PDF report generator
@@ -847,6 +847,15 @@ python -m research_mode.cli input_dir/ -o output_dir/ --report report.json
 - Audit logs are structurally PHI-free and enforced by automated tests
 - Operator tracking
 - Secret salt management for reproducible anonymization
+
+### Governance Documentation (Phase 4)
+
+For detailed constraints, limitations, and risk controls:
+
+- [`docs/PHASE4_NON_GOALS.md`](docs/PHASE4_NON_GOALS.md) — What VoxelMask explicitly does *not* do
+- [`docs/PHASE4_KNOWN_LIMITATIONS.md`](docs/PHASE4_KNOWN_LIMITATIONS.md) — OCR detection constraints and probabilistic nature
+- [`docs/PHASE4_RISK_MITIGATION_MAP.md`](docs/PHASE4_RISK_MITIGATION_MAP.md) — Risk controls and evidence artefacts
+- [`docs/PHASE4_VENDOR_BRIEFING.md`](docs/PHASE4_VENDOR_BRIEFING.md) — External stakeholder summary
 
 ---
 

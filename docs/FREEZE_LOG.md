@@ -190,3 +190,39 @@ without expanding clinical scope or governance risk.
 ---
 
 *This freeze log entry is audit-grade and suitable for governance, FOI officers, or acquisition due-diligence review.*
+
+---
+
+## Phase 5C Close-Out — Known Conservative Behaviour
+
+**Scope clarification — document and worksheet handling**
+
+During Phase 5C validation, it was observed that in **Research compliance mode**, certain document-like objects (e.g. worksheets or secondary capture instances) were processed even when document handling was not explicitly selected via the user interface.
+
+This behaviour is **intentional and policy-driven**, not a processing error.
+
+VoxelMask currently classifies and processes objects based on **image-bearing characteristics and SOP Class**, rather than UI selection alone. Where an object is deemed to potentially contain burned-in PHI within pixel data (for example, US-derived worksheets or SC instances), it is conservatively included to prevent inadvertent omission of identifiable information.
+
+This design ensures that:
+
+* Processing decisions are **deterministic and reproducible**
+* Potential PHI-bearing objects are **not silently excluded**
+* All inclusions are **explicitly logged and auditable**
+* Research workflows err on the side of **over-inclusion rather than data leakage**
+
+User interface selections are treated as **intent signals**, not authoritative overrides of compliance policy, during Phase 5C.
+
+No changes to this behaviour were made during Phase 5C in order to preserve:
+
+* Audit integrity
+* Evidence bundle consistency
+* Governance defensibility at freeze
+
+**Planned refinement**
+
+User-facing clarification and object-type signalling (e.g. SOP Class-aware messaging or warnings) are explicitly deferred to **Phase 6 — UX Hardening**. Any such refinements will not weaken the underlying conservative processing guarantees established in Phase 5C.
+
+**Phase 5C Status**
+
+Phase 5C is considered **complete and frozen**, with conservative inclusion behaviour documented, understood, and accepted as compliant with pilot-safe, non-clinical research use.
+

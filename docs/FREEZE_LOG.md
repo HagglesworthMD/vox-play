@@ -226,3 +226,121 @@ User-facing clarification and object-type signalling (e.g. SOP Class-aware messa
 
 Phase 5C is considered **complete and frozen**, with conservative inclusion behaviour documented, understood, and accepted as compliant with pilot-safe, non-clinical research use.
 
+---
+
+# Freeze Log Entry — Phase 6
+
+## Phase
+
+**Phase 6 — UI Language Pass**
+
+---
+
+## Freeze Status
+
+**FROZEN**
+
+No further wording, labelling, or presentation changes are permitted within Phase 6 scope without explicit re-evaluation.
+
+---
+
+## Freeze Date
+
+**16 December 2025**
+
+---
+
+## Scope of Freeze
+
+This freeze applies to all **user-facing text and labelling** within the VoxelMask application, including but not limited to:
+
+* Application header and subheading
+* Page title (browser tab)
+* Profile selector labels and tooltips
+* Section headers and helper text
+* Button labels
+* Footer disclaimer
+* Error and warning messages
+
+---
+
+## Language Rules Locked
+
+The following language constraints are now enforced:
+
+### Forbidden Words (Anywhere)
+
+* ❌ AI-powered
+* ❌ Fully anonymised
+* ❌ Guaranteed
+* ❌ Safe for clinical use
+* ❌ HIPAA compliant (as a blanket claim)
+* ❌ All PHI removed
+
+### Required Framing
+
+* ✅ "Evaluation build. Copy-out processing only. Not for clinical use."
+* ✅ "Profiles reflect policy intent, not regulatory certification."
+* ✅ "Output is intended for research, audit, or evaluation workflows."
+* ✅ Persistent footer disclaimer acknowledging non-guarantee
+
+---
+
+## Changes Implemented
+
+| Location | Before | After |
+|----------|--------|-------|
+| Page title | `VoxelMask - Intelligent De-ID` | `VoxelMask — Imaging De-Identification (Pilot Mode)` |
+| Header | `VoxelMask` | `VoxelMask — Imaging De-Identification (Pilot Mode)` |
+| Subheading | `*Professional DICOM De-Identification for Clinical & Research Use*` | `**Evaluation build. Copy-out processing only. Not for clinical use.**` |
+| Profile selector label | `Operation Profile` | `De-Identification Profile` |
+| Profile: internal_repair | `🔧 Clinical Correction - Fix patient name/headers (Internal Use)` | `🔧 Internal Repair - Metadata correction (evaluation only)` |
+| Section header | `📁 Select DICOM Files` | `Input Studies` |
+| Helper text | (none) | `DICOM studies are processed in copy-out mode. Source data is not modified.` |
+| Footer | `VoxelMask | DICOM De-Identification Engine` | Persistent disclaimer (non-guarantee + user responsibility) |
+
+---
+
+## Governance Rationale
+
+This language pass ensures:
+
+* **No implicit clinical safety claims** — explicit non-clinical boundary
+* **No silent guarantees** — explicit fallibility acknowledged
+* **Acquisition-grade language** — suitable for vendor due diligence
+* **FOI defensibility** — no overclaims that could be misrepresented
+* **Ops-friendly clarity** — unambiguous expectations for operators
+
+---
+
+## Evidence Supporting Freeze
+
+* All UI text updated in `src/app.py`
+* 666 tests passing after changes
+* No behaviour changes — presentation-layer only
+* Commit: `Phase 6: UI Language Pass — governance-safe wording`
+
+---
+
+## Change Control Post-Freeze
+
+Any of the following changes **invalidate this freeze** and require re-evaluation:
+
+* Introduction of clinical workflow claims
+* Removal of non-clinical disclaimers
+* Modification of footer disclaimer
+* Use of forbidden words
+* Changes implying guarantee or completeness
+
+---
+
+## Sign-Off
+
+**Declared by:** Project Owner / Engineer  
+**Role:** PACS Systems Engineer (Pilot Context)  
+**Project:** VoxelMask  
+**Date:** 16 December 2025
+
+---
+
+*This freeze log entry is audit-grade and suitable for governance, FOI officers, or acquisition due-diligence review.*

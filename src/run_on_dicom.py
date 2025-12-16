@@ -23,6 +23,12 @@ from pydicom.uid import ExplicitVRLittleEndian, UID
 from clinical_corrector import ClinicalCorrector
 from compliance import enforce_dicom_compliance
 from utils import apply_deterministic_sanitization
+from pixel_invariant import (
+    PixelAction,
+    decide_pixel_action,
+    validate_uid_only_output,
+    sha256_bytes,
+)
 
 
 # Namespace UUID for deterministic UID generation (random but fixed)
@@ -290,6 +296,7 @@ def process_dataset(
     research_context: dict = None,
     mask_list: list = None,
     clinical_context: dict = None,
+    audit_dict: dict = None,
 ) -> pydicom.Dataset:
     """
     Pure in-memory processing: anonymize metadata and (optionally) apply pixel masking.
@@ -297,6 +304,9 @@ def process_dataset(
     This is the test-friendly core function that operates on an in-memory Dataset
     without filesystem I/O. The process_dicom() function is a thin wrapper that
     handles file reading/writing.
+    
+    PHASE 3 ENHANCEMENT: Enforces pixel invariant in UID-only mode.
+    When pixel_action == NOT_APPLIED, PixelData bytes are preserved exactly.
     
     Args:
         ds: pydicom Dataset to process (modified in-place and returned)
@@ -306,16 +316,64 @@ def process_dataset(
         research_context: Optional dict with research de-id fields
         mask_list: Optional list of (x, y, w, h) tuples for multiple mask regions
         clinical_context: Optional dict with clinical correction fields
+        audit_dict: Optional dict to populate with audit fields (pixel_action, pixel_invariant, etc.)
         
     Returns:
         The processed Dataset (same object, modified in-place)
     """
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 3: PIXEL ACTION DECISION (Single Source of Truth)
+    # ═══════════════════════════════════════════════════════════════════════════
+    pixel_action = decide_pixel_action(
+        clinical_context=clinical_context,
+        apply_mask=(manual_box is not None or (mask_list is not None and len(mask_list) > 0)),
+        mask_list=mask_list,
+        manual_box=manual_box
+    )
+    
+    # Store baseline hash for UID-only mode invariant check
+    baseline_hash = None
+    if pixel_action == PixelAction.NOT_APPLIED and hasattr(ds, 'PixelData') and ds.PixelData:
+        baseline_hash = sha256_bytes(ds.PixelData)
+    
     # Always anonymize metadata first
     anonymize_metadata(ds, new_name_text, research_context, clinical_context)
     
     # If no pixel data, we are done (metadata-only DICOM)
     if not hasattr(ds, "PixelData") or ds.PixelData is None:
+        # Update audit dict
+        if audit_dict is not None:
+            audit_dict['pixel_action'] = pixel_action.value
+            audit_dict['pixel_invariant'] = 'N/A'
         return ds
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 3: PIXEL INVARIANT ENFORCEMENT (UID-only mode)
+    # ═══════════════════════════════════════════════════════════════════════════
+    if pixel_action == PixelAction.NOT_APPLIED:
+        # Verify pixel data was not mutated by metadata anonymization
+        if baseline_hash is not None:
+            current_hash = sha256_bytes(ds.PixelData)
+            if current_hash != baseline_hash:
+                raise RuntimeError(
+                    f"Pixel invariant violated during metadata anonymization: "
+                    f"PixelData hash changed from {baseline_hash[:16]}... to {current_hash[:16]}... "
+                    f"This is forbidden in UID-only mode."
+                )
+        
+        # Update audit dict
+        if audit_dict is not None:
+            audit_dict['pixel_action'] = pixel_action.value
+            audit_dict['pixel_invariant'] = 'PASS'
+            if baseline_hash:
+                audit_dict['pixel_sha'] = baseline_hash
+        
+        return ds
+    
+    # MASK_APPLIED path - pixel processing handled by process_dicom()
+    if audit_dict is not None:
+        audit_dict['pixel_action'] = pixel_action.value
+        audit_dict['pixel_invariant'] = 'N/A'
     
     # Pixel processing will be handled by the full process_dicom() for now
     # Future: migrate pixel pipeline here for better testability

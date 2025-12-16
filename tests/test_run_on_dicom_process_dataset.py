@@ -59,6 +59,7 @@ def mock_dependencies():
     - clinical_corrector.ClinicalCorrector (not src.clinical_corrector)
     - compliance.enforce_dicom_compliance
     - utils.apply_deterministic_sanitization
+    - pixel_invariant (Phase 3: PixelAction, decide_pixel_action, etc.)
     
     We mock these at the sys.modules level before importing.
     """
@@ -66,6 +67,10 @@ def mock_dependencies():
     mock_clinical_corrector = MagicMock()
     mock_compliance = MagicMock()
     mock_utils = MagicMock()
+    
+    # For pixel_invariant, we use the actual module from src.pixel_invariant
+    # since it's the subject of our Phase 3 tests
+    import src.pixel_invariant as real_pixel_invariant
     
     # Mock the functions/classes that will be used
     mock_clinical_corrector.ClinicalCorrector = MagicMock()
@@ -78,6 +83,7 @@ def mock_dependencies():
         ('clinical_corrector', mock_clinical_corrector),
         ('compliance', mock_compliance),
         ('utils', mock_utils),
+        ('pixel_invariant', real_pixel_invariant),  # Use real module
     ]:
         if name in sys.modules:
             original_modules[name] = sys.modules[name]
@@ -87,10 +93,11 @@ def mock_dependencies():
         'clinical_corrector': mock_clinical_corrector,
         'compliance': mock_compliance,
         'utils': mock_utils,
+        'pixel_invariant': real_pixel_invariant,
     }
     
     # Restore original modules
-    for name in ['clinical_corrector', 'compliance', 'utils']:
+    for name in ['clinical_corrector', 'compliance', 'utils', 'pixel_invariant']:
         if name in original_modules:
             sys.modules[name] = original_modules[name]
         elif name in sys.modules:
@@ -335,3 +342,156 @@ class TestProcessDataset:
             assert out is ds
         finally:
             rod.anonymize_metadata = original_fn
+
+
+# ============================================================================
+# TESTS: UID-Only Mode Pixel Invariant (Phase 3)
+# ============================================================================
+
+class TestUidOnlyModePixelInvariant:
+    """
+    Tests for Phase 3 pixel invariant enforcement.
+    
+    When uid_only_mode=True in clinical_context, PixelData MUST remain unchanged.
+    """
+    
+    def test_uid_only_mode_preserves_pixeldata(self, mock_dependencies):
+        """UID-only mode should preserve PixelData exactly."""
+        import importlib
+        if 'src.run_on_dicom' in sys.modules:
+            del sys.modules['src.run_on_dicom']
+        
+        import src.run_on_dicom as rod
+        
+        original_fn = rod.anonymize_metadata
+        rod.anonymize_metadata = lambda ds, *a, **k: ds
+        
+        try:
+            ds = make_minimal_ds(with_pixels=True)
+            original_pixels = ds.PixelData
+            
+            out = rod.process_dataset(
+                ds,
+                old_name_text="OLD",
+                new_name_text="PRESERVED",
+                clinical_context={"patient_name": "PRESERVED", "uid_only_mode": True},
+            )
+            
+            assert out.PixelData == original_pixels
+        finally:
+            rod.anonymize_metadata = original_fn
+    
+    def test_uid_only_mode_sets_audit_dict(self, mock_dependencies):
+        """UID-only mode should populate audit_dict with pixel_action and pixel_invariant."""
+        import importlib
+        if 'src.run_on_dicom' in sys.modules:
+            del sys.modules['src.run_on_dicom']
+        
+        import src.run_on_dicom as rod
+        
+        original_fn = rod.anonymize_metadata
+        rod.anonymize_metadata = lambda ds, *a, **k: ds
+        
+        try:
+            ds = make_minimal_ds(with_pixels=True)
+            audit = {}
+            
+            rod.process_dataset(
+                ds,
+                old_name_text="OLD",
+                new_name_text="PRESERVED",
+                clinical_context={"patient_name": "PRESERVED", "uid_only_mode": True},
+                audit_dict=audit,
+            )
+            
+            assert audit['pixel_action'] == 'NOT_APPLIED'
+            assert audit['pixel_invariant'] == 'PASS'
+            assert 'pixel_sha' in audit
+        finally:
+            rod.anonymize_metadata = original_fn
+    
+    def test_mask_mode_sets_mask_applied(self, mock_dependencies):
+        """Masking mode should set pixel_action to MASK_APPLIED."""
+        import importlib
+        if 'src.run_on_dicom' in sys.modules:
+            del sys.modules['src.run_on_dicom']
+        
+        import src.run_on_dicom as rod
+        
+        original_fn = rod.anonymize_metadata
+        rod.anonymize_metadata = lambda ds, *a, **k: ds
+        
+        try:
+            ds = make_minimal_ds(with_pixels=True)
+            audit = {}
+            
+            rod.process_dataset(
+                ds,
+                old_name_text="OLD",
+                new_name_text="NEW",
+                manual_box=(0, 0, 10, 10),
+                audit_dict=audit,
+            )
+            
+            assert audit['pixel_action'] == 'MASK_APPLIED'
+        finally:
+            rod.anonymize_metadata = original_fn
+    
+    def test_no_pixels_uid_only_returns_na(self, mock_dependencies):
+        """UID-only mode with no pixels should return N/A invariant."""
+        import importlib
+        if 'src.run_on_dicom' in sys.modules:
+            del sys.modules['src.run_on_dicom']
+        
+        import src.run_on_dicom as rod
+        
+        original_fn = rod.anonymize_metadata
+        rod.anonymize_metadata = lambda ds, *a, **k: ds
+        
+        try:
+            ds = make_minimal_ds(with_pixels=False)
+            audit = {}
+            
+            rod.process_dataset(
+                ds,
+                old_name_text="OLD",
+                new_name_text="PRESERVED",
+                clinical_context={"uid_only_mode": True},
+                audit_dict=audit,
+            )
+            
+            assert audit['pixel_action'] == 'NOT_APPLIED'
+            assert audit['pixel_invariant'] == 'N/A'
+        finally:
+            rod.anonymize_metadata = original_fn
+    
+    def test_pixeldata_hash_is_consistent(self, mock_dependencies):
+        """Hash stored in audit should match actual PixelData."""
+        import importlib
+        import hashlib
+        
+        if 'src.run_on_dicom' in sys.modules:
+            del sys.modules['src.run_on_dicom']
+        
+        import src.run_on_dicom as rod
+        
+        original_fn = rod.anonymize_metadata
+        rod.anonymize_metadata = lambda ds, *a, **k: ds
+        
+        try:
+            ds = make_minimal_ds(with_pixels=True)
+            expected_hash = hashlib.sha256(ds.PixelData).hexdigest()
+            audit = {}
+            
+            rod.process_dataset(
+                ds,
+                old_name_text="OLD",
+                new_name_text="PRESERVED",
+                clinical_context={"uid_only_mode": True},
+                audit_dict=audit,
+            )
+            
+            assert audit.get('pixel_sha') == expected_hash
+        finally:
+            rod.anonymize_metadata = original_fn
+

@@ -626,6 +626,7 @@ These are explicitly deferred, not overlooked.
 | `src/app.py` | Added UI integration (~120 lines) |
 | `tests/test_viewer_state.py` | NEW: 21 tests |
 | `tests/test_audit_unit.py` | Fixed import collision |
+| `tests/test_run_on_dicom_anonymize_unit.py` | Additional tests |
 
 ---
 
@@ -648,4 +649,135 @@ These are explicitly deferred, not overlooked.
 
 *This implementation is presentation-only and does not affect processing outcomes, audit evidence, or export behaviour. Suitable for pilot use.*
 
+---
 
+# Freeze Log Entry — Phase 5C (Close-Out)
+
+## Phase
+
+**Phase 5C — Conservative Behaviour Freeze (Close-Out)**
+
+---
+
+## Status
+
+**CLOSED**
+
+---
+
+## Date
+
+**17 December 2025**
+
+---
+
+## Tag
+
+`v0.5.0-phase5c-frozen`
+
+---
+
+## Scope of Freeze
+
+Phase 5C formally freezes VoxelMask’s **conservative processing behaviour**, recoverability posture, and audit guarantees for pilot and evaluation use.
+
+This freeze establishes VoxelMask as a **non-clinical, copy-out-only DICOM processor** with deterministic anonymisation, burned-in PHI masking, and audit-grade evidence generation. No further changes to processing semantics, recoverability, or governance posture are permitted under Phase 5C.
+
+---
+
+## Gate Status Summary
+
+| Gate   | Description               | Status                |
+| ------ | ------------------------- | --------------------- |
+| Gate 1 | Series Order Preservation | **Complete**          |
+| Gate 2 | Source Recoverability     | **Executed & Locked** |
+| Gate 3 | Audit Completeness        | **Satisfied**         |
+
+All Phase 5C decision gates are closed.
+
+---
+
+## Gate 2 — Source Recoverability (Authoritative Decision)
+
+**Selected Model:**
+**Model B — External Source Recoverability (Audit Linkage)**
+
+**Definition:**
+VoxelMask does **not** retain original pixel data or reversible diffs. Original images remain exclusively within the source PACS. VoxelMask retains cryptographically verifiable audit artefacts that irreversibly link each masked output to its originating source object.
+
+**Implications:**
+
+* VoxelMask is **not** a system of record
+* VoxelMask is **not** a data vault or escrow
+* VoxelMask cannot “unmask” or restore original pixels
+* Verification and legal discovery target the PACS, not VoxelMask
+
+**Rejected Models:**
+
+* **Model A (Internal Recoverability / Escrow):** Rejected due to creation of a shadow medical record, expanded liability surface, and unnecessary vault/key-management complexity for a copy-out pilot.
+* **Model C (Irrecoverable / Amnesic):** Rejected as legally and operationally indefensible; insufficient to prove input/output correspondence under FOI, audit, or safety review.
+
+This decision is formally recorded in:
+
+* `PHASE5C_GATE2_SOURCE_RECOVERABILITY.md`
+* `PHASE5C_GATE2_DECISION_RECORD.md`
+
+---
+
+## Frozen Behaviour (Authoritative)
+
+The following behaviours are **intentionally fixed** under Phase 5C:
+
+* Deterministic DICOM metadata anonymisation
+* SOP-Class–driven object inclusion and handling
+* Burned-in PHI detection and masking using conservative assumptions
+* No clinical routing, write-back, or real-time processing
+* No retention of original pixel data
+* No reversible masking or escrow functionality
+* Audit artefact generation sufficient for third-party verification without PHI custody
+
+Any deviation from the above requires a new phase and explicit governance approval.
+
+---
+
+## Mandatory Audit Artefacts (Phase 5C Baseline)
+
+For every processing job, VoxelMask **must** emit:
+
+* Job Manifest (configuration, operator/host, timestamps)
+* Object Decision Records (source ↔ output linkage)
+* Cryptographic hashes of original and masked pixel data (SHA-256)
+* Mask Plan (regions, classifications, coordinates; **no OCR text content**)
+* Cryptographic signature of the job record (e.g. Ed25519)
+
+These artefacts define the minimum defensible evidence set and are frozen for Phase 5C.
+
+---
+
+## Explicit Non-Goals (Reaffirmed)
+
+Phase 5C explicitly excludes:
+
+* Clinical decision support
+* Claims of complete PHI removal
+* PACS write-back or modification
+* RIS / MPPS / worklist integration
+* Acting as a long-term medical record store
+* “Undo”, “restore”, or “re-identify” functionality
+
+---
+
+## Forward Constraint
+
+All subsequent work (including Phase 6 UX Hardening) is constrained to **presentation, clarity, and usability only**. No changes may alter:
+
+* Recoverability semantics
+* Audit guarantees
+* Conservative inclusion behaviour
+* Governance posture established in Phase 5C
+
+---
+
+**Phase 5C is hereby declared CLOSED.**
+
+---

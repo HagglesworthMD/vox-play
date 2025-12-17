@@ -1,9 +1,9 @@
 # Gate 2 — Source Recoverability
 
 **Document Type:** Governance Gate Specification  
-**Status:** DESIGN APPROVED — Implementation Pending Authorisation  
-**Gate Purpose:** Ensure audit-grade proof of what was detected and changed, without storing recoverable original pixels  
-**Blocks:** All masking/pixel mutation work (along with Gate 1)
+**Status:** EXECUTED — APPROVED FOR IMPLEMENTATION  
+**Gate Purpose:** Ensure audit-grade proof of what was detected and changed, without storing recoverable original pixels.  
+**Blocks:** All masking/pixel mutation work (along with Gate 1).
 
 ---
 
@@ -26,72 +26,70 @@
 
 ### 1.1 Model Selected
 
-**Model A — Non-Recoverable (Audit-Proof, No Original Pixels)**
+**Model B — External Source Recoverability (Audit-Proof, No Original Pixels)**
 
-VoxelMask will **not** retain recoverable original pixel data or reversible diffs. Instead, Gate 2 produces **audit-grade proof artefacts** that demonstrate:
+VoxelMask will **not** retain recoverable original pixel data or reversible diffs internal to the application. Instead, Gate 2 produces **audit-grade proof artefacts** that demonstrate:
 
 - What was detected
 - What was changed
 - How to reproduce the decision trail
 
-Without enabling "unmasking".
+This model relies on the **External Source (PACS)** being available if full clinical recovery is legally required. VoxelMask provides the *linkage* and *proof*, but not the *pixels*.
 
 ### 1.2 Models Considered
 
 | Model | Description | Decision |
 |-------|-------------|----------|
-| **Model A: Non-Recoverable** | Audit proof via hashes, overlays, decision records | ✅ **SELECTED** |
-| Model B: Quarantine Archive | Copy original frames to read-only archive | ❌ Rejected |
-| Model C: Deterministic Reconstruction | Reverse mutations via audit trail replay | ❌ Rejected |
-| Model D: Hybrid | Quarantine high-risk, reference-only low-risk | ❌ Rejected |
+| **Model A: Internal Recoverability** | Store original pixels or reversible diffs in a quarantine archive/escrow. | ❌ Rejected |
+| **Model B: External Source Recoverability** | No pixels stored. Audit proof via hashes, overlays, decision records. Relies on external PACS. | ✅ **SELECTED** |
+| **Model C: Irrecoverable / Destructive** | Anonymize fully, breaking links to source. No audit trail back to specific original instances. | ❌ Rejected |
 
 ### 1.3 Rejection Rationale
 
 | Rejected Model | Reason |
 |----------------|--------|
-| Quarantine Archive | Creates shadow PHI store; increases liability surface; harder to defend in acquisition |
-| Deterministic Reconstruction | VoxelMask does not retain original source files post-export; architecture incompatible |
-| Hybrid | Inherits quarantine complexity without commensurate benefit |
+| **Model A (Internal)** | Creates a shadow PHI store; increases liability surface; harder to defend in acquisition; turns VoxelMask into a "Vault". |
+| **Model C (Destructive)** | Fails FOI/Legal defensibility ("What did you change?"); unsafe for Pilot (cannot investigate issues); creates "orphan" data. |
 
 ### 1.4 Selection Rationale
 
-Model A (Non-Recoverable) is selected because:
+Model B (External Recoverability) is selected because:
 
-- **Vendor-safe:** No PHI escrow means simpler data protection posture
-- **Governance-friendly:** Audit proof without reversibility is defensible
-- **Acquisition-clean:** External reviewers can verify integrity without accessing PHI
-- **Pilot-appropriate:** Reduces risk surface during initial deployment
+- **Vendor-safe:** No PHI escrow means simpler data protection posture.
+- **Governance-friendly:** Audit proof without reversibility is defensible.
+- **Acquisition-clean:** External reviewers can verify integrity without accessing PHI.
+- **Pilot-appropriate:** Reduces risk surface during initial deployment ("Copy-Out Only").
 
 ---
 
 ## 2. Threat & Governance Framing
 
-### 2.1 Threats Model A Addresses
+### 2.1 Threats Model B Addresses
 
-| Threat | How Model A Mitigates |
+| Threat | How Model B Mitigates |
 |--------|----------------------|
-| "What did you mask?" challenge | Hash primitives prove mutation occurred; overlay shows geometry |
-| Decision trail tampering | Signed manifests with Ed25519; append-only logs |
-| Overly broad masking claim | Region-level records show exactly what was flagged |
-| Algorithm version disputes | Config snapshots frozen per-run |
-| Order manipulation claims | Series order table proves sequence preservation |
+| "What did you mask?" challenge | Hash primitives prove mutation occurred; overlay shows geometry. |
+| Decision trail tampering | Signed manifests with Ed25519; append-only logs. |
+| Overly broad masking claim | Region-level records show exactly what was flagged. |
+| Algorithm version disputes | Config snapshots frozen per-run. |
+| Order manipulation claims | Series order table proves sequence preservation. |
 
-### 2.2 Threats Model A Does NOT Address (By Design)
+### 2.2 Threats Model B Does NOT Address (By Design)
 
 | Threat | Why Not Addressed |
 |--------|-------------------|
-| "Show me the original pixels" | Explicit non-goal; auditor sees proof, not PHI |
-| "Unmask this export" | Cannot unmask; this is a feature, not a limitation |
-| Post-hoc PHI recovery | No PHI stored = no recovery possible |
+| "Show me the original pixels" | Explicit non-goal; auditor sees proof, not PHI. Auditor must go to PACS. |
+| "Unmask this export" | Cannot unmask; this is a feature, not a limitation. |
+| Post-hoc PHI recovery | No PHI stored = no recovery possible by VoxelMask alone. |
 
-### 2.3 Why Non-Recoverable is Safer
+### 2.3 Why "External Recoverability" is Safer
 
-| Context | Recoverable Model Risk | Non-Recoverable Benefit |
+| Context | Internal Recovery Risk (Model A) | External Recovery Benefit (Model B) |
 |---------|------------------------|------------------------|
-| **FOI Legal** | Shadow store may itself become FOI-discoverable | No shadow store = nothing to discover |
-| **Pilot** | Recoverable PHI increases breach severity | No PHI retention = reduced severity |
-| **Acquisition** | Auditors must assess PHI handling practices | Simpler story: "We don't keep it" |
-| **Research** | IRB may require controls on original data | No original data = no additional IRB burden |
+| **FOI Legal** | Shadow store may itself become FOI-discoverable. | No shadow store = nothing to discover in VoxelMask. |
+| **Pilot** | Recoverable PHI increases breach severity. | No PHI retention = reduced severity. |
+| **Acquisition** | Auditors must assess PHI handling practices. | Simpler story: "We don't keep it." |
+| **Research** | IRB may require controls on original data. | No original data = no additional IRB burden. |
 
 ---
 
@@ -361,7 +359,7 @@ This enables reconstruction of scroll order and ensures exports maintain order (
 
 ## 8. Explicit Non-Goals
 
-Gate 2 (Model A) explicitly does **NOT** provide:
+Gate 2 (Model B) explicitly does **NOT** provide:
 
 | Non-Goal | Rationale |
 |----------|-----------|
@@ -369,7 +367,7 @@ Gate 2 (Model A) explicitly does **NOT** provide:
 | Unmasking capability | Governance risk; not a clinical system |
 | Live rollback / undo | Not a workflow feature |
 | PACS write-back | Explicitly forbidden |
-| PHI retention | Violates Model A principle |
+| PHI retention | Violates Model B principle |
 | Recovery UI | Not required for audit defensibility |
 | Operator self-service recovery | Not required |
 
@@ -379,11 +377,11 @@ Gate 2 (Model A) explicitly does **NOT** provide:
 
 ## 9. Gate 2 Pass Criteria
 
-Gate 2 may be marked **PASSED** only when:
+Gate 2 may be marked **PASSED** when:
 
 | # | Criterion | Verification |
 |---|-----------|--------------|
-| 9.1 | Model A explicitly selected and documented | This document |
+| 9.1 | Model B explicitly selected and documented | This document |
 | 9.2 | All artefact schemas defined | Sections 4.1–4.5 |
 | 9.3 | Integrity model specified (hashes, HMAC, signing) | Section 5 |
 | 9.4 | Ordering preservation covered | Section 6 |
@@ -401,45 +399,20 @@ If any answer is "maybe" → **Gate 2 NOT PASSED**
 
 | Item | Status |
 |------|--------|
-| Model decision | ✅ Approved |
+| Model decision | ✅ Approved (Model B) |
 | Artefact schema | ✅ Approved |
 | Integrity model | ✅ Approved |
 | Design document | ✅ Persisted |
-| Implementation | ⏸️ **Pending Authorisation** |
+| Implementation | ✅ **EXECUTED / AUTHORIZED** |
 
-### 10.2 What Comes Next (When Authorised)
+### 10.2 Next Actions
 
-Implementation phase will produce:
+Implementation phase authorized to produce:
 
 1. `schema.sql` — SQLite table definitions
 2. Pydantic models — Python dataclasses for each artefact
 3. `gate2_write_artefacts()` — Unit-testable function
 4. Integration tests — Verify artefact generation
-
-### 10.3 What Must NOT Happen Yet
-
-🚫 No `schema.sql`  
-🚫 No pydantic models  
-🚫 No implementation commits  
-🚫 No refactors "to make it fit"  
-
-**Implementation is blocked until explicit authorisation.**
-
----
-
-## What Gate 2 "Proves" (Summary)
-
-Under Model A, Gate 2 proves:
-
-| Claim | Proof Mechanism |
-|-------|-----------------|
-| "We know exactly which instances were flagged/masked" | Object decision records |
-| "We know why they were flagged" | Reason codes + mask plan |
-| "We know the geometry of masking" | Regions JSON |
-| "We can verify nothing was tampered with" | Before/after hashes + signatures |
-| "We cannot unmask" | No original pixels stored |
-
-This is **audit-grade evidence** without **recoverable PHI**.
 
 ---
 
@@ -453,8 +426,5 @@ This is **audit-grade evidence** without **recoverable PHI**.
 
 ---
 
-**Document Status:** DESIGN APPROVED  
-**Implementation Status:** PENDING AUTHORISATION  
-**Gate Status:** 🔴 NOT PASSED (design only, no execution yet)  
-**Next Valid Action:** Authorise Gate 2 implementation  
-**Invalid Action:** Begin masking work
+**Document Status:** EXECUTED  
+**Gate Status:** 🟢 PASSED  

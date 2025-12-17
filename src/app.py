@@ -244,9 +244,9 @@ if 'phi_review_session' not in st.session_state:
 if 'selection_scope' not in st.session_state:
     st.session_state.selection_scope = SelectionScope.create_default()  # Conservative: images=True, documents=False
 
-def generate_clinical_filename(original_filename: str, new_patient_id: str, series_description: str) -> str:
+def generate_repair_filename(original_filename: str, new_patient_id: str, series_description: str) -> str:
     """
-    Generate descriptive clinical filename with series description.
+    Generate descriptive filename for internal repair with series description.
     
     Args:
         original_filename: Original DICOM filename
@@ -1653,7 +1653,7 @@ st.caption(_build_stamp())
 
 # Initialize variables (previously in sidebar)
 enable_manual_mask = True
-clinical_context = None
+repair_context = None
 research_context = None
 new_patient_name = ""
 
@@ -1883,7 +1883,7 @@ else:
     
     # DERIVE legacy 'mode' from profile for backward compatibility
     if pacs_operation_mode == "internal_repair":
-        mode = "Clinical Correction"
+        mode = "Internal Repair"
     else:
         mode = "Research De-ID"
     
@@ -2565,7 +2565,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 st.caption(
                     "ℹ️ *Secondary Capture images may contain scanned documents or screenshots. "
                     "Encapsulated PDFs are documents embedded in DICOM format. "
-                    "Both may contain unmasked PHI. "
+                    "Both may contain visible PHI. "
                     "This warning is informational only and does not change masking or export.*"
                 )
                 
@@ -2643,7 +2643,7 @@ if st.session_state.get('uploaded_dicom_files'):
                         st.rerun()
                 
                 with bulk_col2:
-                    if st.button("🟢 Unmask All", key="bulk_unmask_all", use_container_width=True):
+                    if st.button("🟢 Keep All", key="bulk_unmask_all", use_container_width=True):
                         review_session.unmask_all()
                         if not review_session.review_started:
                             review_session.start_review()
@@ -2678,7 +2678,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 for idx, region in enumerate(regions):
                     source_icon = "🔍 OCR" if region.source == RegionSource.OCR else "✏️ Manual"
                     current_action = region.get_effective_action()
-                    action_icon = "🔴 MASK" if current_action == RegionAction.MASK else "🟢 UNMASK"
+                    action_icon = "🔴 MASK" if current_action == RegionAction.MASK else "🟢 KEEP"
                     
                     # Phase 5A: Generate presentation elements (no state mutation)
                     semantics = RegionSemantics.from_region_attributes(
@@ -2705,7 +2705,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             st.markdown(action_icon)
                         else:
                             # Toggle button
-                            toggle_label = "🟢 Unmask" if current_action == RegionAction.MASK else "🔴 Mask"
+                            toggle_label = "🟢 Keep" if current_action == RegionAction.MASK else "🔴 Mask"
                             if st.button(toggle_label, key=f"toggle_{region.region_id}", use_container_width=True):
                                 review_session.toggle_region(region.region_id)
                                 if not review_session.review_started:
@@ -2789,7 +2789,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 if review_session.can_accept():
                     st.markdown("---")
                     st.markdown("**Ready to proceed?**")
-                    st.caption("⚠️ Once accepted, region decisions are locked and cannot be changed.")
+                    st.caption("⚠️ Once accepted, region decisions are locked and cannot be changed. Original pixel data is NOT retained.")
                     
                     if st.button("✅ Accept & Continue", key="accept_review", type="primary", use_container_width=True):
                         review_session.accept()
@@ -3282,7 +3282,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 operator_name = ""
                 auto_timestamp = True
                 research_context = None
-                clinical_context = None
+                repair_context = None
                 compliance_profile = "safe_harbor"
                 research_trial_id = "TRIAL-001"
                 research_site_id = "SITE-01"
@@ -3300,7 +3300,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 foi_recipient = ""  # For "Dear X" greeting in patient letter
                 
                 # ═══════════════════════════════════════════════════════════════
-                # PROFILE A: CLINICAL CORRECTION (internal_repair)
+                # PROFILE A: INTERNAL REPAIR (internal_repair)
                 # Show: Patient Name, Sex, DOB, Study Details
                 # ═══════════════════════════════════════════════════════════════
                 if pacs_operation_mode == "internal_repair":
@@ -3320,7 +3320,7 @@ if st.session_state.get('uploaded_dicom_files'):
                         patient_sex = ""
                         patient_dob = None
                     else:
-                        # Normal Clinical Correction mode - Patient Demographics
+                        # Normal Internal Repair mode - Patient Demographics
                         col1, col2 = st.columns([2, 1])
                         with col1:
                             new_patient_name = st.text_input(
@@ -3409,7 +3409,7 @@ if st.session_state.get('uploaded_dicom_files'):
                     
                     # Set patient name to preserve for FOI
                     new_patient_name = "PRESERVED"  # Placeholder - actual name kept from original
-                    clinical_context = None
+                    repair_context = None
                     research_context = None
                 
                 # ═══════════════════════════════════════════════════════════════
@@ -3466,7 +3466,7 @@ if st.session_state.get('uploaded_dicom_files'):
                         "deid_date": str(research_deid_date)
                     }
                     new_patient_name = research_context["subject_id"]
-                    clinical_context = None
+                    repair_context = None
                     
                 
                 # ═══════════════════════════════════════════════════════════════
@@ -3529,7 +3529,7 @@ if st.session_state.get('uploaded_dicom_files'):
             # Validation happens AFTER form submission
             can_process = True
             
-            # Only require patient name for Clinical Correction (unless UID-only mode)
+            # Only require patient name for Internal Repair (unless UID-only mode)
             if pacs_operation_mode == "internal_repair" and not uid_only_mode and not new_patient_name.strip():
                 if process_btn:
                     st.warning("⚠️ Please enter a patient name before processing")
@@ -3549,7 +3549,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 # Show confirmation that review is complete
                 if process_btn:
                     summary = review_session.get_summary()
-                    st.success(f"✅ Review accepted: {summary['will_mask']} region(s) to mask, {summary['will_unmask']} override(s)")
+                    st.success(f"✅ Review accepted: {summary['will_mask']} region(s) to mask, {summary['will_unmask']} override(s) to keep")
             
             if process_btn and can_process:
                 # Note: Accession numbers are generated per-file automatically
@@ -3563,8 +3563,8 @@ if st.session_state.get('uploaded_dicom_files'):
                 
                 # Build context dictionary based on profile
                 if pacs_operation_mode == "internal_repair":
-                    # Clinical Correction
-                    clinical_context = {
+                    # Internal Repair
+                    repair_context = {
                         "patient_name": new_patient_name.strip(),
                         "patient_sex": patient_sex,
                         "patient_dob": str(patient_dob) if patient_dob else "",
@@ -3584,11 +3584,11 @@ if st.session_state.get('uploaded_dicom_files'):
                     research_context = None
                 elif pacs_operation_mode.startswith("foi_"):
                     # FOI mode - no context needed, data preserved from original
-                    clinical_context = None
+                    repair_context = None
                     research_context = None
                 else:
                     # Research modes (Safe Harbor, AU Strict)
-                    clinical_context = None
+                    repair_context = None
                     research_context = {
                         "trial_id": research_trial_id.strip() if research_trial_id else "TRIAL-001",
                         "site_id": research_site_id.strip() if research_site_id else "SITE-01",
@@ -3750,7 +3750,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             anonymizer = DicomAnonymizer(config)
                             result = anonymizer.anonymize_file(input_path, output_path)
                             success = result.success
-                        elif clinical_context and clinical_context.get('uid_only_mode', False):
+                        elif repair_context and repair_context.get('uid_only_mode', False):
                             # ═══════════════════════════════════════════════════════════════════
                             # UID-ONLY MODE: Metadata-only path (Phase 3 Pixel Invariant)
                             # ═══════════════════════════════════════════════════════════════════
@@ -3786,7 +3786,7 @@ if st.session_state.get('uploaded_dicom_files'):
                                 ds,
                                 old_name_text=original_name,
                                 new_name_text="PRESERVED",  # Marker - actual patient name preserved
-                                clinical_context=clinical_context,
+                                clinical_context=repair_context,
                                 audit_dict=audit_dict,
                             )
                             
@@ -3817,7 +3817,7 @@ if st.session_state.get('uploaded_dicom_files'):
                                 new_name_text=new_patient_name.strip(),
                                 manual_box=manual_box if apply_mask else None,
                                 research_context=research_context,
-                                clinical_context=clinical_context
+                                clinical_context=repair_context
                             )
                         
                         if success:
@@ -3880,8 +3880,8 @@ if st.session_state.get('uploaded_dicom_files'):
                                 processed_data = f.read()
                             
                             # Generate filename for this file
-                            if mode == "Clinical Correction":
-                                file_filename = generate_clinical_filename(
+                            if mode == "Internal Repair":
+                                file_filename = generate_repair_filename(
                                     file_buffer.name,
                                     new_patient_name.strip(),
                                     get_original_metadata(input_path).get('series_description', 'Scan')
@@ -3962,7 +3962,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             new_meta = {
                                 'patient_name': str(verification_ds.PatientName) if hasattr(verification_ds, 'PatientName') else 'ANONYMIZED',
                                 'patient_id': str(verification_ds.PatientID) if hasattr(verification_ds, 'PatientID') else 'ANONYMIZED',
-                                # FOI mode and Clinical Correction preserve accession for chain of custody/workflow
+                                # FOI mode and Internal Repair preserve accession for chain of custody/workflow
                                 'accession': (str(verification_ds.AccessionNumber) if hasattr(verification_ds, 'AccessionNumber') and verification_ds.AccessionNumber else orig_accession) if (is_foi_mode or pacs_operation_mode == "internal_repair") else 'REMOVED',
                                 'study_date': actual_study_date or 'DATE_MISSING'
                             }
@@ -4069,10 +4069,10 @@ if st.session_state.get('uploaded_dicom_files'):
                         else:
                             root_folder_raw = f"FOI_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     
-                    elif clinical_context:
-                        # CLINICAL MODE: Use patient name (this is a clinical correction)
-                        patient_name = clinical_context.get('patient_name', '')
-                        uid_only = clinical_context.get('uid_only_mode', False)
+                    elif repair_context:
+                        # REPAIR MODE: Use patient name (this is an internal repair)
+                        patient_name = repair_context.get('patient_name', '')
+                        uid_only = repair_context.get('uid_only_mode', False)
                         
                         if uid_only:
                             # In UID-only mode, get original patient name from first file
@@ -4081,7 +4081,7 @@ if st.session_state.get('uploaded_dicom_files'):
                         elif patient_name and patient_name != "PRESERVED":
                             root_folder_raw = patient_name
                         else:
-                            root_folder_raw = f"Clinical_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                            root_folder_raw = f"Repair_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     
                     elif research_context:
                         # RESEARCH MODE: Use subject_id + trial_id (de-identified)
@@ -4268,7 +4268,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             try:
                                 # Determine report type based on operation mode
                                 if pacs_operation_mode == "internal_repair":
-                                    report_type = "CLINICAL"
+                                    report_type = "INTERNAL_REPAIR"
                                     pdf_filename = "VoxelMask_DataRepairLog.pdf"
                                 elif pacs_operation_mode == "us_research_safe_harbor":
                                     report_type = "RESEARCH"
@@ -4283,7 +4283,7 @@ if st.session_state.get('uploaded_dicom_files'):
                                     report_type = "FOI_PATIENT"
                                     pdf_filename = "VoxelMask_PatientRelease.pdf"
                                 else:
-                                    report_type = "CLINICAL"
+                                    report_type = "INTERNAL_REPAIR"
                                     pdf_filename = "VoxelMask_Report.pdf"
                                 
                                 # Build PDF data dictionary from session state
@@ -4509,7 +4509,7 @@ Studies in this archive:
                                 f"OCR Detected: {summary['ocr_regions']}\n"
                                 f"Manual: {summary['manual_regions']}\n"
                                 f"Will Mask: {summary['will_mask']}\n"
-                                f"Overrides (Unmask): {summary['will_unmask']}\n"
+                                f"Overrides (Keep): {summary['will_unmask']}\n"
                                 f"Decision Records Committed: {decisions_recorded}\n"
                                 f"Scrub UUID: {scrub_uuid}\n"
                             )

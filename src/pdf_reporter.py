@@ -4,7 +4,7 @@ VoxelMask PDF Reporter - Universal Report Generator
 Generates professional PDF reports for all compliance profiles.
 
 Report Types:
-- CLINICAL: Data Repair Log
+- INTERNAL_REPAIR: Data Repair Log
 - RESEARCH: Safe Harbor Certificate
 - STRICT: OAIC Privacy Audit
 - FOI_LEGAL: Forensic Integrity Certificate
@@ -89,7 +89,7 @@ class PDFReporter:
         Create a PDF report based on type and data.
         
         Args:
-            report_type: One of CLINICAL, RESEARCH, STRICT, FOI_LEGAL, FOI_PATIENT
+            report_type: One of INTERNAL_REPAIR, RESEARCH, STRICT, FOI_LEGAL, FOI_PATIENT
             data: Dictionary containing report-specific data
             output_path: Optional path to save PDF file
             
@@ -98,7 +98,7 @@ class PDFReporter:
         """
         # Route to appropriate generator
         generators = {
-            'CLINICAL': self._generate_clinical_report,
+            'INTERNAL_REPAIR': self._generate_internal_repair_report,
             'RESEARCH': self._generate_research_report,
             'STRICT': self._generate_strict_report,
             'FOI_LEGAL': self._generate_foi_legal_report,
@@ -120,19 +120,19 @@ class PDFReporter:
         return pdf_bytes
     
     # ═══════════════════════════════════════════════════════════════════════════
-    # PROFILE A: CLINICAL - Data Repair Log
+    # PROFILE A: INTERNAL_REPAIR - Data Repair Log
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def _generate_clinical_report(self, data: Dict) -> bytes:
-        """Generate Clinical Data Repair Log."""
-        pdf = VoxelMaskPDF(title="Data Repair Log", report_type="CLINICAL")
+    def _generate_internal_repair_report(self, data: Dict) -> bytes:
+        """Generate Internal Repair Data Log."""
+        pdf = VoxelMaskPDF(title="Data Repair Log", report_type="INTERNAL REPAIR")
         pdf.alias_nb_pages()
         pdf.add_page()
         
         # Summary section
         pdf.set_font('Helvetica', 'B', 16)
         pdf.set_text_color(0, 0, 0)
-        pdf.cell(0, 10, 'Clinical Data Repair Summary', ln=True)
+        pdf.cell(0, 10, 'Internal Data Repair Summary', ln=True)
         
         pdf.set_font('Helvetica', '', 11)
         pdf.set_text_color(60, 60, 60)
@@ -737,7 +737,7 @@ def create_report(report_type: str, data: Dict, output_path: Optional[str] = Non
     Convenience function to create a PDF report.
     
     Args:
-        report_type: CLINICAL, RESEARCH, STRICT, FOI_LEGAL, FOI_PATIENT, NIFTI
+        report_type: INTERNAL_REPAIR, RESEARCH, STRICT, FOI_LEGAL, FOI_PATIENT, NIFTI
         data: Dictionary with report-specific data
         output_path: Optional path to save the PDF
         

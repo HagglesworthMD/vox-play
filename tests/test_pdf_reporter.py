@@ -37,11 +37,11 @@ class TestPDFReporterInit:
         assert reporter is not None
 
 
-class TestClinicalReport:
-    """Tests for CLINICAL report type."""
+class TestInternalRepairReport:
+    """Tests for INTERNAL_REPAIR report type."""
     
     def test_generates_without_error(self):
-        """CLINICAL report should generate without raising."""
+        """INTERNAL_REPAIR report should generate without raising."""
         reporter = PDFReporter()
         data = {
             'patient_name': 'DOE^JOHN',
@@ -49,18 +49,18 @@ class TestClinicalReport:
             'study_date': '2024-01-15',
             'operator': 'TestOperator',
         }
-        result = reporter.create_pdf('CLINICAL', data)
+        result = reporter.create_pdf('INTERNAL_REPAIR', data)
         assert isinstance(result, bytes)
     
     def test_output_has_reasonable_size(self):
-        """CLINICAL report should produce output larger than 1KB."""
+        """INTERNAL_REPAIR report should produce output larger than 1KB."""
         reporter = PDFReporter()
         data = {'patient_name': 'TEST^PATIENT'}
-        result = reporter.create_pdf('CLINICAL', data)
+        result = reporter.create_pdf('INTERNAL_REPAIR', data)
         assert len(result) > 1024  # At least 1KB
     
     def test_with_fixed_tags(self):
-        """CLINICAL report should handle fixed_tags list."""
+        """INTERNAL_REPAIR report should handle fixed_tags list."""
         reporter = PDFReporter()
         data = {
             'patient_name': 'DOE^JANE',
@@ -69,11 +69,11 @@ class TestClinicalReport:
                 {'name': 'PatientID', 'original': '12345', 'new': '54321', 'action': 'Modified'},
             ]
         }
-        result = reporter.create_pdf('CLINICAL', data)
+        result = reporter.create_pdf('INTERNAL_REPAIR', data)
         assert len(result) > 1024
     
     def test_with_mask_applied(self):
-        """CLINICAL report should handle mask_applied flag."""
+        """INTERNAL_REPAIR report should handle mask_applied flag."""
         reporter = PDFReporter()
         data = {
             'patient_name': 'MASKED^PATIENT',
@@ -81,11 +81,11 @@ class TestClinicalReport:
             'mask_region': '(10, 10, 200, 50)',
             'frames_processed': 100,
         }
-        result = reporter.create_pdf('CLINICAL', data)
+        result = reporter.create_pdf('INTERNAL_REPAIR', data)
         assert len(result) > 1024
     
     def test_with_audit_hashes(self):
-        """CLINICAL report should include audit trail hashes."""
+        """INTERNAL_REPAIR report should include audit trail hashes."""
         reporter = PDFReporter()
         data = {
             'patient_name': 'AUDIT^TEST',
@@ -93,7 +93,7 @@ class TestClinicalReport:
             'original_hash': 'a' * 64,
             'processed_hash': 'b' * 64,
         }
-        result = reporter.create_pdf('CLINICAL', data)
+        result = reporter.create_pdf('INTERNAL_REPAIR', data)
         assert len(result) > 1024
 
 
@@ -278,7 +278,7 @@ class TestInvalidReportType:
         try:
             reporter.create_pdf('BAD', {})
         except ValueError as e:
-            assert 'CLINICAL' in str(e)
+            assert 'INTERNAL_REPAIR' in str(e)
             assert 'RESEARCH' in str(e)
 
 
@@ -287,7 +287,7 @@ class TestConvenienceFunction:
     
     def test_creates_report(self):
         """create_report should work like reporter.create_pdf."""
-        result = create_report('CLINICAL', {'patient_name': 'TEST'})
+        result = create_report('INTERNAL_REPAIR', {'patient_name': 'TEST'})
         assert isinstance(result, bytes)
         assert len(result) > 1024
     
@@ -317,7 +317,7 @@ class TestCaseInsensitivity:
     
     def test_lowercase_type(self):
         """Report type should work with lowercase."""
-        result = create_report('clinical', {'patient_name': 'TEST'})
+        result = create_report('internal_repair', {'patient_name': 'TEST'})
         assert len(result) > 1024
     
     def test_mixed_case_type(self):

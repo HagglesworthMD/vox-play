@@ -148,6 +148,7 @@ from phase5a_ui_semantics import RegionSemantics  # Phase 5A: Presentation-only 
 from selection_scope import SelectionScope, ObjectCategory, classify_object, should_include_object, get_category_label, generate_scope_audit_block, generate_scope_json  # Phase 6: Explicit selection semantics
 from viewer_state import ViewerStudyState, build_viewer_state, ViewerOrderingMethod, SeriesOrderingMethod, get_instance_ordering_label, get_series_ordering_label  # Phase 6: Viewer UX
 from export.viewer_index import generate_viewer_index  # Phase 6: HTML export viewer
+from run_context import generate_run_id, build_run_paths, ensure_run_dirs  # Phase 8: Operational hardening
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -243,6 +244,12 @@ if 'phi_review_session' not in st.session_state:
 # Phase 6: Initialize selection scope for explicit document inclusion
 if 'selection_scope' not in st.session_state:
     st.session_state.selection_scope = SelectionScope.create_default()  # Conservative: images=True, documents=False
+
+# Phase 8: Initialize run context for operational hardening
+if 'run_id' not in st.session_state:
+    st.session_state.run_id = None  # Generated per processing run
+if 'run_paths' not in st.session_state:
+    st.session_state.run_paths = None  # RunPaths object
 
 def generate_repair_filename(original_filename: str, new_patient_id: str, series_description: str) -> str:
     """
@@ -3621,6 +3628,23 @@ if st.session_state.get('uploaded_dicom_files'):
                 selection_scope = st.session_state.selection_scope
                 scope_audit_block = generate_scope_audit_block(selection_scope)
                 combined_audit_logs.append(scope_audit_block)
+                
+                # ═══════════════════════════════════════════════════════════════
+                # PHASE 8: Create Run Context (Operational Hardening 4.2)
+                # Single run ID for this entire processing session
+                # ═══════════════════════════════════════════════════════════════
+                run_id = generate_run_id()
+                st.session_state.run_id = run_id
+                
+                # Determine output root (use downloads directory for now)
+                output_root = Path(os.path.dirname(__file__)).parent / "downloads"
+                run_paths = build_run_paths(output_root, run_id)
+                ensure_run_dirs(run_paths)
+                st.session_state.run_paths = run_paths
+                
+                # Log run context creation (debug, non-PHI)
+                print(f"[Phase8] Run context created: {run_id}")
+                print(f"[Phase8] Run directory: {run_paths.root}")
                 
                 # ═══════════════════════════════════════════════════════════════
                 # DIAGNOSTIC TRACKING - Start timer and byte counter

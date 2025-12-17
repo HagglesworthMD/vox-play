@@ -286,7 +286,8 @@ function loadImage(instance) {
 
     // Derive image path (expect .png alongside .dcm)
     // GOVERNANCE: We do NOT check if file exists — just try to load
-    const imagePath = instance.file_path.replace(/\.dcm$/i, '.png');
+    // NOTE: Viewer is in /viewer/ subfolder, images are in root, so prefix with ../
+    const imagePath = '../' + instance.file_path.replace(/\.dcm$/i, '.png');
 
     const img = document.createElement('img');
     img.alt = `Instance ${instance.display_index}`;
@@ -298,7 +299,7 @@ function loadImage(instance) {
 
     img.onerror = () => {
         // Try JPEG as fallback
-        const jpegPath = instance.file_path.replace(/\.dcm$/i, '.jpg');
+        const jpegPath = '../' + instance.file_path.replace(/\.dcm$/i, '.jpg');
         const imgJpeg = document.createElement('img');
         imgJpeg.alt = img.alt;
 

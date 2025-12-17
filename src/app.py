@@ -105,6 +105,7 @@ import time
 import zipfile
 from datetime import date, datetime
 from pathlib import Path
+from typing import Optional, List, Dict
 
 import cv2
 import numpy as np
@@ -146,6 +147,7 @@ from decision_trace import DecisionTraceCollector, DecisionTraceWriter, record_r
 from phase5a_ui_semantics import RegionSemantics  # Phase 5A: Presentation-only UX semantics
 from selection_scope import SelectionScope, ObjectCategory, classify_object, should_include_object, get_category_label, generate_scope_audit_block, generate_scope_json  # Phase 6: Explicit selection semantics
 from viewer_state import ViewerStudyState, build_viewer_state, ViewerOrderingMethod, SeriesOrderingMethod, get_instance_ordering_label, get_series_ordering_label  # Phase 6: Viewer UX
+from export.viewer_index import generate_viewer_index  # Phase 6: HTML export viewer
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1549,6 +1551,89 @@ def dicom_to_pil(dcm_path: str) -> tuple:
     orig_h, orig_w = frame.shape[:2]
     pil_img = Image.fromarray(frame, mode='RGB')
     return pil_img, orig_w, orig_h
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 6: HTML EXPORT VIEWER HELPERS
+# Presentation-only rendering for export ZIP viewer.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def render_dicom_bytes_to_png(data: bytes) -> Optional[bytes]:
+    """
+    Render DICOM bytes to PNG for HTML viewer preview (presentation only).
+    
+    GOVERNANCE: This is export-time presentation rendering, not processing.
+    DICOM bytes are already final. No metadata changes. No pixel mutation.
+    PNG is explicitly a derived artefact for view-only purposes.
+    """
+    import tempfile
+    
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".dcm", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        
+        pil_img, _, _ = dicom_to_pil(tmp_path)
+        
+        with io.BytesIO() as buf:
+            pil_img.save(buf, format="PNG")
+            return buf.getvalue()
+    
+    except Exception:
+        return None
+    
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _build_viewer_ordered_entries(processed_files: List[Dict], file_info_cache: Dict, root_folder: str) -> List[Dict]:
+    """
+    Build ordered_entries for viewer_index.json from processed files.
+    
+    GOVERNANCE:
+    - Read-only assembly from existing state
+    - No mutation of processed_files
+    - No reordering (preserves export order exactly)
+    - No touching anonymisation/masking/audit logic
+    
+    Args:
+        processed_files: List of processed file dicts from export
+        file_info_cache: Metadata cache from preflight scan
+        root_folder: Export root folder name
+    
+    Returns:
+        List of entry dicts suitable for generate_viewer_index()
+    """
+    ordered_entries = []
+    
+    for pf in processed_files:
+        src_name = pf.get("original_name")  # original upload filename
+        info = (file_info_cache or {}).get(src_name, {})  # may be empty
+        
+        # Build relative path within export
+        folder_path = pf.get("folder_path", "").strip("/")
+        filename = pf.get("filename", "unknown.dcm")
+        dicom_rel = f"{folder_path}/{filename}" if folder_path else filename
+        
+        ordered_entries.append({
+            # Viewer index wants paths relative to root_folder
+            "relative_path": dicom_rel,
+            "file_path": dicom_rel,  # tolerant duplicate key
+            
+            # Required viewer grouping / navigation metadata
+            "modality": info.get("modality") or pf.get("modality") or "UNK",
+            "series_number": info.get("series_number") or pf.get("series_number"),
+            "series_description": info.get("series_desc") or info.get("series_description") or "Unknown",
+            "series_instance_uid": info.get("series_instance_uid") or "UNKNOWN",
+            
+            "sop_instance_uid": info.get("sop_instance_uid") or "UNKNOWN",
+            "instance_number": info.get("instance_number"),  # allow None
+        })
+    
+    return ordered_entries
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -3207,6 +3292,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 regenerate_uids = False
                 exclude_scanned_docs = False
                 output_as_nifti = False
+                include_html_viewer = False  # Phase 6: HTML export viewer
                 foi_case_ref = ""
                 foi_requesting_party = ""
                 foi_facility_name = "Medical Imaging Department"
@@ -3407,6 +3493,30 @@ if st.session_state.get('uploaded_dicom_files'):
                         ⚠️ **Warning**: This **strips most metadata**.
                         ❌ DICOM Viewer will NOT be included (incompatible format).
                         """)
+                
+                # ═══════════════════════════════════════════════════════════════
+                # HTML EXPORT VIEWER (Phase 6 - Presentation only)
+                # ═══════════════════════════════════════════════════════════════
+                st.markdown("---")
+                st.markdown("**🔍 Export Viewer**")
+                
+                include_html_viewer = st.checkbox(
+                    "📄 Include HTML export viewer (view-only navigation)",
+                    value=False,
+                    help="Adds a view-only HTML viewer and presentation index to the ZIP. Does not modify DICOM."
+                )
+                
+                if include_html_viewer:
+                    st.info("""
+                    ℹ️ **View-Only Navigation**: Adds a browser-based viewer for convenient image browsing.
+                    
+                    📋 **Includes**:
+                    - Series browser with modality grouping
+                    - Stack navigation (prev/next)
+                    - PNG previews for web display
+                    
+                    ⚠️ **Note**: This viewer is for convenience only. It does not represent DICOM structure.
+                    """)
                 
                 # Form submit button
                 st.markdown("---")
@@ -4114,6 +4224,23 @@ if st.session_state.get('uploaded_dicom_files'):
                                 zip_path = f"{root_folder}/{original_path}"
                                 zip_file.writestr(zip_path, file_info['data'])
                                 
+                                # ═══════════════════════════════════════════════════════════════
+                                # PHASE 6: PNG PREVIEW FOR HTML VIEWER (Presentation only)
+                                # ═══════════════════════════════════════════════════════════════
+                                if include_html_viewer:
+                                    try:
+                                        # Only render PNG for image modalities
+                                        modality = file_info.get('modality', '')
+                                        if modality.upper() in ['US', 'CT', 'MR', 'DX', 'CR', 'MG', 'XA', 'RF', 'NM', 'PT']:
+                                            png_bytes = render_dicom_bytes_to_png(file_info['data'])
+                                            if png_bytes:
+                                                # Write PNG adjacent to DICOM (same path, .png extension)
+                                                png_zip_path = zip_path.rsplit('.', 1)[0] + '.png'
+                                                zip_file.writestr(png_zip_path, png_bytes)
+                                    except Exception:
+                                        # Silent skip - viewer.js will show "Image unavailable" if missing
+                                        pass
+                                
                                 # Track folder structure for summary
                                 folder_path = file_info.get('folder_path', 'Processed')
                                 if '/' in folder_path:
@@ -4289,6 +4416,49 @@ Studies in this archive:
                                 with open(viewer_path, 'r', encoding='utf-8') as f:
                                     viewer_content = f.read()
                                 zip_file.writestr(f"{root_folder}/DICOM_Viewer.html", viewer_content)
+                            
+                            # ═══════════════════════════════════════════════════════════════
+                            # PHASE 6: HTML EXPORT VIEWER (Presentation only)
+                            # Write viewer assets and index. Index MUST be written LAST.
+                            # ═══════════════════════════════════════════════════════════════
+                            if include_html_viewer:
+                                try:
+                                    # Copy viewer assets from static/
+                                    static_dir = os.path.join(os.path.dirname(__file__), '..', 'static')
+                                    for asset_name in ('viewer.html', 'viewer.css', 'viewer.js'):
+                                        asset_path = os.path.join(static_dir, asset_name)
+                                        if os.path.exists(asset_path):
+                                            with open(asset_path, 'rb') as f:
+                                                zip_file.writestr(f"{root_folder}/viewer/{asset_name}", f.read())
+                                    
+                                    # Add friendly redirect at root level
+                                    redirect_html = b"<!doctype html><meta http-equiv='refresh' content='0; url=viewer/viewer.html'><title>VoxelMask Export Viewer</title>"
+                                    zip_file.writestr(f"{root_folder}/VIEWER.html", redirect_html)
+                                    
+                                    # ═══════════════════════════════════════════════════════════════
+                                    # GOVERNANCE: Write viewer_index.json LAST
+                                    # This ensures all other artefacts are committed before index.
+                                    # ═══════════════════════════════════════════════════════════════
+                                    ordered_entries = _build_viewer_ordered_entries(
+                                        processed_files=processed_files,
+                                        file_info_cache=file_info_cache,
+                                        root_folder=root_folder
+                                    )
+                                    
+                                    viewer_index = generate_viewer_index(
+                                        ordered_entries=ordered_entries,
+                                        ordering_source="export_order_manifest",
+                                        output_path=None  # No filesystem write - we write to ZIP
+                                    )
+                                    
+                                    # Convert to JSON and write to ZIP
+                                    import json as json_module
+                                    index_json = json_module.dumps(viewer_index.to_dict(), indent=2).encode('utf-8')
+                                    zip_file.writestr(f"{root_folder}/viewer/viewer_index.json", index_json)
+                                    
+                                except Exception as viewer_error:
+                                    # Viewer is optional - don't fail export if viewer generation fails
+                                    st.warning(f"HTML viewer generation failed: {viewer_error}. DICOM export completed successfully.")
                     
                     # Store folder structure info for display
                     st.session_state.folder_structure_info = {

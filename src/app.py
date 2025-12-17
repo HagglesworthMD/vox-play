@@ -1729,6 +1729,9 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     downloads_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")
     os.makedirs(downloads_dir, exist_ok=True)
     
+    # Phase 8: Get run paths for deterministic output locations
+    run_paths = st.session_state.get("run_paths")
+    
     if num_files > 1:
         # Multiple files - use meaningful folder name for ZIP filename
         output_name = st.session_state.get('output_folder_name', f"VoxelMask_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
@@ -1819,7 +1822,13 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     
     # Always offer audit log download
     audit_filename = f"VoxelMask_AuditLog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    audit_path = os.path.join(downloads_dir, audit_filename)
+    
+    # Phase 8: Route to run directory when available, fallback to downloads/
+    if run_paths:
+        audit_path = str(run_paths.logs_dir / audit_filename)
+    else:
+        audit_path = os.path.join(downloads_dir, audit_filename)
+    
     with open(audit_path, 'w', encoding='utf-8') as f:
         f.write(st.session_state.combined_audit_logs)
     

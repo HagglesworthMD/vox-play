@@ -149,6 +149,7 @@ from selection_scope import SelectionScope, ObjectCategory, classify_object, sho
 from viewer_state import ViewerStudyState, build_viewer_state, ViewerOrderingMethod, SeriesOrderingMethod, get_instance_ordering_label, get_series_ordering_label  # Phase 6: Viewer UX
 from export.viewer_index import generate_viewer_index  # Phase 6: HTML export viewer
 from run_context import generate_run_id, build_run_paths, ensure_run_dirs  # Phase 8: Operational hardening
+from preflight import run_preflight, raise_if_failed, PreflightError  # Phase 8: Startup gate
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -3669,6 +3670,39 @@ if st.session_state.get('uploaded_dicom_files'):
                 }
                 status_path.write_text(json.dumps(status_payload, indent=2) + "\n", encoding="utf-8")
                 print(f"[Phase8] Run status written: {status_path}")
+                
+                # ═══════════════════════════════════════════════════════════════
+                # PHASE 8: Run Preflight Checks (4.1)
+                # Fail early on unsafe conditions; update run_status on failure
+                # ═══════════════════════════════════════════════════════════════
+                try:
+                    mode = st.session_state.get("processing_mode") or pacs_operation_mode
+                    preflight_result = run_preflight(
+                        downloads_dir=Path(os.path.dirname(__file__)).parent / "downloads",
+                        run_root=run_paths.root,
+                        processing_mode=mode,
+                        min_free_bytes=250 * 1024 * 1024,  # 250MB conservative
+                        required_modules=("pydicom",),
+                    )
+                    raise_if_failed(preflight_result)
+                    print(f"[Phase8] Preflight: PASS")
+                    
+                except PreflightError as preflight_err:
+                    # Update run_status.json to preflight_failed
+                    try:
+                        existing_status = json.loads(status_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        existing_status = {"run_id": run_id, "status": "unknown"}
+                    existing_status["status"] = "preflight_failed"
+                    status_path.write_text(json.dumps(existing_status, indent=2) + "\n", encoding="utf-8")
+                    
+                    # Write preflight error log
+                    err_path = run_paths.logs_dir / "preflight_error.txt"
+                    err_path.write_text(str(preflight_err).strip() + "\n", encoding="utf-8")
+                    
+                    st.error("🚫 Preflight checks failed. See preflight_error.txt in the run logs folder.")
+                    print(f"[Phase8] Preflight: FAILED - {preflight_err}")
+                    st.stop()
                 
                 # ═══════════════════════════════════════════════════════════════
                 # DIAGNOSTIC TRACKING - Start timer and byte counter

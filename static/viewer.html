@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoxelMask Export Viewer</title>
+    <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+    <!-- 
+    ═══════════════════════════════════════════════════════════════════════════
+    VOXELMASK EXPORT VIEWER — Presentation Only
+    ═══════════════════════════════════════════════════════════════════════════
+    
+    This is a view-only navigation aid for exported images.
+    It does NOT represent DICOM series structure or modify exported data.
+    Display order matches the export manifest.
+    
+    For authoritative data, refer to the exported DICOM files directly.
+    ═══════════════════════════════════════════════════════════════════════════
+    -->
+
+    <header class="viewer-header">
+        <div class="header-content">
+            <h1 class="header-title">VoxelMask Export Viewer</h1>
+            <p class="header-subtitle">View-only navigation for exported images</p>
+        </div>
+    </header>
+
+    <main class="viewer-container">
+        <!-- Series Browser (Left Panel) -->
+        <aside class="series-browser">
+            <div class="browser-header">
+                <h2>Series</h2>
+                <span class="series-count" id="series-count-display">
+                    <!-- JS populates: "3 of 5 series" -->
+                    Loading...
+                </span>
+            </div>
+
+            <div class="series-list" id="series-list">
+                <!-- JS will populate series rows here -->
+                <div class="series-row placeholder">
+                    <span class="series-icon">⏳</span>
+                    <span class="series-desc">Loading series...</span>
+                </div>
+            </div>
+
+            <div class="series-filter">
+                <label class="filter-checkbox">
+                    <input type="checkbox" id="show-documents-toggle">
+                    <span class="filter-label">Show document series (OT/SC)</span>
+                </label>
+                <p class="filter-note" id="hidden-series-note">
+                    <!-- JS populates: "📄 2 document series hidden (OT/SC)" -->
+                </p>
+            </div>
+        </aside>
+
+        <!-- Image Viewport (Main Panel) -->
+        <section class="image-viewport">
+            <div class="viewport-header">
+                <span class="viewport-series-desc" id="viewport-series-desc">
+                    Select a series to view
+                </span>
+                <span class="viewport-position" id="viewport-position">
+                    <!-- JS populates: "Image 12 of 43" -->
+                </span>
+            </div>
+
+            <div class="viewport-image-container">
+                <div class="image-display" id="image-display">
+                    <!-- JS inserts <img> here -->
+                    <div class="image-placeholder" id="image-placeholder">
+                        <div class="placeholder-icon">🖼️</div>
+                        <div class="placeholder-text">Select a series to view images</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="viewport-controls">
+                <button class="nav-button" id="btn-prev" disabled>◀</button>
+                <input type="range" class="nav-slider" id="nav-slider" min="1" max="1" value="1" disabled>
+                <button class="nav-button" id="btn-next" disabled>▶</button>
+            </div>
+
+            <div class="viewport-metadata" id="viewport-metadata">
+                <!-- JS populates: "Instance #12 | Display position: 12/43" -->
+            </div>
+        </section>
+    </main>
+
+    <footer class="viewer-footer">
+        <div class="footer-content">
+            <p class="footer-disclaimer">
+                <strong>Presentation only.</strong>
+                This viewer provides convenient navigation of exported images.
+                It does not represent DICOM series structure or modify exported data.
+            </p>
+            <p class="footer-order-source">
+                Display order matches the export manifest.
+                For authoritative data, refer to the exported DICOM files directly.
+            </p>
+            <p class="footer-generated" id="footer-generated">
+                <!-- JS populates: "Generated: 2025-12-17 | Ordering source: export_order_manifest" -->
+            </p>
+        </div>
+    </footer>
+
+    <!-- 
+    JavaScript loaded last. Page displays meaningful fallback without JS.
+    <script src="viewer.js"></script>
+    -->
+</body>
+</html>

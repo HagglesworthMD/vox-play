@@ -3656,6 +3656,21 @@ if st.session_state.get('uploaded_dicom_files'):
                 print(f"[Phase8] Run directory: {run_paths.root}")
                 
                 # ═══════════════════════════════════════════════════════════════
+                # PHASE 8: Write run_status.json stub (4.2.4)
+                # Establishes run identity; prepares for fail-safe behaviour
+                # ═══════════════════════════════════════════════════════════════
+                import json
+                from datetime import timezone
+                status_path = run_paths.root / "run_status.json"
+                status_payload = {
+                    "run_id": run_id,
+                    "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "status": "in_progress",
+                }
+                status_path.write_text(json.dumps(status_payload, indent=2) + "\n", encoding="utf-8")
+                print(f"[Phase8] Run status written: {status_path}")
+                
+                # ═══════════════════════════════════════════════════════════════
                 # DIAGNOSTIC TRACKING - Start timer and byte counter
                 # ═══════════════════════════════════════════════════════════════
                 import time

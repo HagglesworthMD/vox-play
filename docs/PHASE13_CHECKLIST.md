@@ -15,8 +15,8 @@ A curious PACS engineer can use it all day without confusion, crashes, or surpri
 - [x] Viewer opens reliably after processing (localhost HTTP server)
 - [x] Viewer path does **not** reference ephemeral `/run/user/*` locations
 - [x] Viewer ZIP + in-app viewer use the **same stable source** (`run_paths.viewer_dir`)
-- [ ] If viewer is missing → clear message, not browser error
-- [ ] Viewer failure does **not** invalidate processing result
+- [x] If viewer is missing → clear message, not browser error
+- [x] Viewer failure does **not** invalidate processing result
 
 **Hard rule:**
 No new viewer buttons, modes, or export types.

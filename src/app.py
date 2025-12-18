@@ -151,6 +151,7 @@ from export.viewer_index import generate_viewer_index  # Phase 6: HTML export vi
 from run_context import generate_run_id, build_run_paths, ensure_run_dirs  # Phase 8: Operational hardening
 from preflight import run_preflight, raise_if_failed, PreflightError  # Phase 8: Startup gate
 from evidence_capture import build_run_receipt, write_run_receipt, assert_phi_sterile  # Phase 8: Evidence capture
+from run_status import update_run_status  # Phase 8: Fail-safe completion
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -4129,6 +4130,20 @@ if st.session_state.get('uploaded_dicom_files'):
                     st.session_state.processing_complete = True
                     
                     # ═══════════════════════════════════════════════════════════════
+                    # PHASE 8: Mark run completed (4.5)
+                    # ═══════════════════════════════════════════════════════════════
+                    try:
+                        if run_paths:
+                            update_run_status(
+                                run_paths.root,
+                                status="completed",
+                                timestamp_field="completed_at",
+                            )
+                            print(f"[Phase8] Run status: completed")
+                    except Exception:
+                        pass  # Non-fatal
+                    
+                    # ═══════════════════════════════════════════════════════════════
                     # DIAGNOSTIC STATS - Calculate processing metrics
                     # ═══════════════════════════════════════════════════════════════
                     processing_end_time = time.time()
@@ -4631,6 +4646,20 @@ Studies in this archive:
                     # Rerun to show download UI
                     st.rerun()
                 else:
+                    # ═══════════════════════════════════════════════════════════════
+                    # PHASE 8: Mark run failed (4.5)
+                    # ═══════════════════════════════════════════════════════════════
+                    try:
+                        if run_paths:
+                            update_run_status(
+                                run_paths.root,
+                                status="failed",
+                                timestamp_field="failed_at",
+                                failure_reason="no_files_processed",
+                            )
+                            print(f"[Phase8] Run status: failed (no_files_processed)")
+                    except Exception:
+                        pass  # Non-fatal
                     st.error("No files were processed successfully")
             
         else:

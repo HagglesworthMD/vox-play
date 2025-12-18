@@ -302,7 +302,7 @@ def _open_viewer_via_localhost(run_root: str, run_id: str) -> tuple[bool, str]:
     # Verify viewer exists
     viewer_path = Path(run_root) / "viewer" / "viewer.html"
     if not viewer_path.exists():
-        return False, f"Viewer not found: {viewer_path}"
+        return False, "Viewer was not generated for this run. Re-process your files with 'Include HTML export viewer' enabled."
     
     try:
         # Start or reuse server
@@ -328,7 +328,7 @@ def _open_viewer_via_localhost(run_root: str, run_id: str) -> tuple[bool, str]:
         return True, f"Viewer opened: {viewer_url}"
     
     except Exception as e:
-        return False, f"Failed to start viewer server: {e}"
+        return False, f"Could not start viewer server. Try closing other browser tabs and clicking again. ({type(e).__name__})"
 
 def _ensure_early_run_context() -> 'RunPaths':
     """

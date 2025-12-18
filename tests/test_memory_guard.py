@@ -15,7 +15,7 @@ class TestMemoryGuard(unittest.TestCase):
         ds.BitsAllocated = 16
         ds.SamplesPerPixel = 1
         
-        # 512*512*2 bytes = 0.5 MB << 300 MB
+        # 512*512*2 bytes = 0.5 MB << 150 MB
         self.assertTrue(should_render_pixels(ds))
 
     def test_should_render_pixels_large(self):
@@ -27,10 +27,10 @@ class TestMemoryGuard(unittest.TestCase):
         ds.SamplesPerPixel = 1
         
         # 1024*1024*2 = 2 MB per frame
-        # Need > 300 MB -> > 150 frames
-        ds.NumberOfFrames = 200 
+        # Need > 150 MB -> > 75 frames
+        ds.NumberOfFrames = 100 
         
-        # 200 * 2 MB = 400 MB > 300 MB
+        # 100 * 2 MB = 200 MB > 150 MB
         self.assertFalse(should_render_pixels(ds))
 
     def test_should_render_pixels_custom_limit(self):

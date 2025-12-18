@@ -132,7 +132,7 @@ def estimate_pixel_memory(ds: pydicom.Dataset) -> int:
         return 0
 
 
-def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 300_000_000) -> bool:
+def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 150_000_000) -> bool:
     """
     Check if a DICOM dataset is too large for safe pixel rendering.
     
@@ -140,7 +140,7 @@ def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 300_000
     
     Args:
         ds: pydicom Dataset
-        max_raw_pixel_bytes: Limit (default 300MB)
+        max_raw_pixel_bytes: Limit (default 150MB - conservative for Steam Deck shared RAM)
         
     Returns:
         True if safe to render, False if exceeds limit

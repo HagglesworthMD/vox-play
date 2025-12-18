@@ -50,7 +50,8 @@
 
     /* Layout */
     --header-height: 60px;
-    --footer-height: 100px;
+    --footer-height: 50px;
+    /* Reduced from 100px for more image space */
     --browser-width: 280px;
 
     /* Typography */
@@ -415,11 +416,13 @@ body {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .viewer-footer {
-    min-height: var(--footer-height);
+    max-height: var(--footer-height);
     background-color: var(--bg-secondary);
     border-top: 1px solid var(--border-color);
-    padding: var(--spacing-md) var(--spacing-lg);
+    padding: var(--spacing-xs) var(--spacing-md);
     flex-shrink: 0;
+    overflow: hidden;
+    /* Clip overflow rather than expand */
 }
 
 .footer-content {
@@ -429,9 +432,10 @@ body {
 }
 
 .footer-disclaimer {
-    font-size: var(--font-size-sm);
+    font-size: 11px;
+    /* Smaller for compact footer */
     color: var(--text-secondary);
-    margin-bottom: var(--spacing-xs);
+    margin-bottom: 2px;
 }
 
 .footer-disclaimer strong {
@@ -439,22 +443,26 @@ body {
 }
 
 .footer-order-source {
-    font-size: var(--font-size-sm);
+    font-size: 10px;
     color: var(--text-muted);
-    margin-bottom: var(--spacing-xs);
+    margin-bottom: 2px;
+    display: none;
+    /* Hide verbose text to save space */
 }
 
 .footer-generated {
-    font-size: var(--font-size-sm);
+    font-size: 10px;
     color: var(--text-muted);
     font-style: italic;
 }
 
 .footer-multiframe-note {
-    font-size: var(--font-size-sm);
+    font-size: 10px;
     color: var(--text-muted);
     font-style: italic;
-    margin-bottom: var(--spacing-xs);
+    margin-bottom: 2px;
+    display: none;
+    /* Hide to save space */
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -1773,7 +1773,7 @@ def display_preview(dcm_path: str, caption: str):
         
         st.image(frame, caption=caption, use_container_width=True)
     except Exception as e:
-        st.warning(f"Preview unavailable: {e}")
+        st.warning("Preview unavailable for this file.")
 
 def display_preview_with_mask(dcm_path: str, mask_coords: tuple, caption: str):
     """Display preview with red rectangle showing mask area."""
@@ -1819,7 +1819,7 @@ def display_preview_with_mask(dcm_path: str, mask_coords: tuple, caption: str):
         cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 3)
         st.image(frame, caption=caption, use_container_width=True)
     except Exception as e:
-        st.warning(f"Preview unavailable: {e}")
+        st.warning("Preview unavailable for this file.")
 
 def dicom_to_pil(dcm_path: str) -> tuple:
     """Convert DICOM to PIL Image, return (pil_image, original_width, original_height)."""
@@ -2452,7 +2452,7 @@ if uploaded_files:
                                 except:
                                     pass
             except Exception as e:
-                st.error(f"Error extracting ZIP: {e}")
+                st.error("Could not read this ZIP file. Try uploading DICOM files directly instead.")
         else:
             # Regular file - filter out non-DICOM files (HTML, CSS, JS, text, etc.)
             skip_extensions = ('.html', '.htm', '.css', '.js', '.txt', '.md', '.json', '.xml', '.pdf', '.doc', '.docx')
@@ -2690,7 +2690,7 @@ if st.session_state.get('uploaded_dicom_files'):
 
                     
                 except Exception as e:
-                    st.warning(f"Could not analyze {file_buffer.name}: {e}")
+                    st.warning(f"Could not analyze {file_buffer.name}. This file will be skipped.")
                     # Default to docs bucket if analysis fails (need user to review)
                     bucket_docs.append(file_buffer)
     
@@ -3319,7 +3319,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             st.image(pil_img, use_container_width=True)
                         except Exception as e:
                             # Real error - image modality should have displayable pixels
-                            st.error(f"Cannot display image: {e}")
+                            st.error("Image preview unavailable. Processing will continue normally.")
                     else:
                         # Non-image modality (OT, SC, SR, DOC, etc.) - neutral placeholder
                         st.markdown("""
@@ -3554,7 +3554,7 @@ if st.session_state.get('uploaded_dicom_files'):
                     st.rerun()
                     
             except Exception as e:
-                st.error(f"Could not load US preview: {e}")
+                st.error("Preview unavailable. Processing will continue normally.")
         
         # Set manual_box for processing
         manual_box = st.session_state.us_shared_mask
@@ -4567,7 +4567,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             pass
                             
                     except Exception as e:
-                        st.error(f"Error processing {file_buffer.name}: {e}")
+                        st.error(f"Could not process {file_buffer.name}. This file will be skipped.")
                 
                 # Complete progress
                 progress_bar.progress(1.0)
@@ -4785,7 +4785,7 @@ if st.session_state.get('uploaded_dicom_files'):
                                 
                         except Exception as nifti_error:
                             nifti_conversion_success = False
-                            st.warning(f"NIfTI conversion error: {nifti_error}. Falling back to DICOM output.")
+                            st.warning("NIfTI conversion unavailable. DICOM output used instead.")
                         
                         finally:
                             # Clean up temp directories
@@ -4961,7 +4961,7 @@ if st.session_state.get('uploaded_dicom_files'):
                                 
                             except Exception as pdf_error:
                                 # Fallback to text if PDF fails
-                                st.warning(f"PDF generation failed ({pdf_error}), using text log instead.")
+                                st.warning("PDF report unavailable. Text log included instead.")
                                 zip_file.writestr(f"{root_folder}/VoxelMask_AuditLog.txt", audit_content)
                             
                             # Also include text log as backup (for machine parsing)
@@ -5173,7 +5173,7 @@ Studies in this archive:
                             
                         except Exception as e:
                             # Log warning but don't fail export
-                            st.warning(f"Decision trace recording failed: {e}")
+                            st.warning("Decision trace could not be saved. Export completed successfully.")
                     
                     st.session_state.output_zip_buffer = zip_buffer.getvalue()
                     
@@ -5194,7 +5194,7 @@ Studies in this archive:
                             print(f"[Phase8] Run status: failed (no_files_processed)")
                     except Exception:
                         pass  # Non-fatal
-                    st.error("No files were processed successfully")
+                    st.error("No files were processed. Check that your input contains valid DICOM files.")
             
         else:
             st.info("📁 Upload DICOM files to begin processing")

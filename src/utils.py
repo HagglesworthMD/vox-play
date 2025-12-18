@@ -102,3 +102,53 @@ def apply_deterministic_sanitization(dataset: pydicom.Dataset, date_shift_days: 
                 dataset.file_meta.MediaStorageSOPInstanceUID = new_uid
             except Exception:
                 pass
+
+
+def estimate_pixel_memory(ds: pydicom.Dataset) -> int:
+    """
+    Estimate the uncompressed RAM requirement in bytes.
+    
+    Args:
+        ds: pydicom Dataset
+        
+    Returns:
+        Estimated bytes (int)
+    """
+    try:
+        rows = int(getattr(ds, "Rows", 0) or 0)
+        cols = int(getattr(ds, "Columns", 0) or 0)
+        frames = int(getattr(ds, "NumberOfFrames", 1) or 1)
+        bits = int(getattr(ds, "BitsAllocated", 16) or 16)
+        samples = int(getattr(ds, "SamplesPerPixel", 1) or 1)
+        
+        # Estimate raw size: H * W * Frames * (Bytes/Pixel) * Samples
+        # bits // 8 usually gives 1 (8-bit) or 2 (16-bit). 
+        # For calculation safety, use at least 1 byte if bits > 0
+        bytes_per_sample = max(1, bits // 8)
+        
+        est_bytes = rows * cols * frames * bytes_per_sample * samples
+        return est_bytes
+    except Exception:
+        return 0
+
+
+def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 300_000_000) -> bool:
+    """
+    Check if a DICOM dataset is too large for safe pixel rendering.
+    
+    Estimates the uncompressed RAM requirement.
+    
+    Args:
+        ds: pydicom Dataset
+        max_raw_pixel_bytes: Limit (default 300MB)
+        
+    Returns:
+        True if safe to render, False if exceeds limit
+    """
+    est_bytes = estimate_pixel_memory(ds)
+    # If estimate is 0 (e.g. no rows/cols), we assume it's safe (likely no pixels)
+    # or handle it elsewhere.
+    if est_bytes == 0 and (not hasattr(ds, 'PixelData') or not ds.PixelData):
+        return True
+        
+    return est_bytes <= max_raw_pixel_bytes

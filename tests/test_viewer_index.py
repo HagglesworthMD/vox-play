@@ -358,6 +358,21 @@ class TestJSONSerialization:
         assert 'instance_number' in instance
         assert 'display_index' in instance
 
+    def test_to_js_produces_valid_assignment(self, sample_entries):
+        """to_js should produce a valid JavaScript global assignment."""
+        index = generate_viewer_index(sample_entries, ordering_source='test')
+        
+        js_str = index.to_js()
+        
+        # Check for assignment prefix
+        assert js_str.startswith('window.VOXELMASK_VIEWER_INDEX = ')
+        assert js_str.endswith(';')
+        
+        # Extract and parse JSON part
+        json_part = js_str[len('window.VOXELMASK_VIEWER_INDEX = '):-1]
+        parsed = json.loads(json_part)
+        assert parsed['total_instances'] == 4
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TEST: VALIDATION
@@ -403,6 +418,29 @@ class TestValidation:
         errors = validate_viewer_index(index)
         
         assert any('ordering_source' in e for e in errors)
+
+    def test_absolute_path_detected_as_error(self):
+        """Absolute file_paths should be flagged as errors."""
+        index = ViewerIndex(
+            schema_version=SCHEMA_VERSION,
+            generated_at=datetime.now().isoformat(),
+            study_uid=None,
+            total_instances=0,
+            series=[ViewerIndexSeries(
+                series_uid='S1', series_number=1, series_description='desc',
+                modality='US', is_image_modality=True,
+                instances=[ViewerIndexInstance(
+                    file_path='/absolute/path.dcm',
+                    sop_instance_uid='1.2.3',
+                    instance_number=1,
+                    display_index=1
+                )]
+            )],
+            ordering_source='test',
+        )
+        
+        errors = validate_viewer_index(index)
+        assert any('Absolute path' in e for e in errors)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -450,6 +488,9 @@ class TestFileWriting:
         
         output_file = tmp_path / 'viewer_index.json'
         assert output_file.exists()
+        
+        js_file = tmp_path / 'viewer_index.js'
+        assert js_file.exists()
     
     def test_written_file_is_valid_json(self, sample_entries, tmp_path):
         """Written file should contain valid, parseable JSON."""
@@ -465,6 +506,20 @@ class TestFileWriting:
         # Should parse without error
         parsed = json.loads(content)
         assert parsed['total_instances'] == 4
+
+    def test_written_js_file_contains_assignment(self, sample_entries, tmp_path):
+        """Written JS file should contain the global assignment."""
+        generate_viewer_index(
+            sample_entries,
+            ordering_source='test',
+            output_path=tmp_path,
+        )
+        
+        js_file = tmp_path / 'viewer_index.js'
+        content = js_file.read_text()
+        
+        assert content.startswith('window.VOXELMASK_VIEWER_INDEX = ')
+        assert content.endswith(';')
     
     def test_no_write_when_output_path_none(self, sample_entries, tmp_path):
         """Should NOT write file when output_path is None."""

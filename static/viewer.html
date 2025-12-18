@@ -113,6 +113,8 @@
     </footer>
 
     <!-- JavaScript for navigation (page works with fallback if JS fails to load) -->
+    <!-- Load index via JS variable for file:// protocol support -->
+    <script src="viewer_index.js" onerror="console.log('Index JS not found, will fallback to fetch')"></script>
     <script src="viewer.js"></script>
 </body>
 

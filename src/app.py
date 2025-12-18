@@ -139,6 +139,7 @@ generate_audit_receipt = _audit_module.generate_audit_receipt
 from research_mode.anonymizer import DicomAnonymizer, AnonymizationConfig
 from interactive_canvas import draw_canvas_with_image
 from compliance_engine import DicomComplianceManager
+from utils import should_render_pixels  # Memory guard
 from nifti_handler import NiftiConverter, convert_dataset_to_nifti, generate_nifti_readme, generate_fallback_warning_file, check_dicom2nifti_available
 from foi_engine import FOIEngine, process_foi_request, exclude_scanned_documents
 from pdf_reporter import PDFReporter, create_report
@@ -151,6 +152,7 @@ from export.viewer_index import generate_viewer_index  # Phase 6: HTML export vi
 from run_context import generate_run_id, build_run_paths, ensure_run_dirs  # Phase 8: Operational hardening
 from preflight import run_preflight, raise_if_failed, PreflightError  # Phase 8: Startup gate
 from evidence_capture import build_run_receipt, write_run_receipt, assert_phi_sterile  # Phase 8: Evidence capture
+from session_state import reset_run_state, RUN_ID_KEY  # Phase 12: Centralized run state
 from run_status import update_run_status  # Phase 8: Fail-safe completion
 
 # Define base directory for dynamic path construction
@@ -228,10 +230,50 @@ def _get_viewer_cache_path(file_buffer, run_paths: 'RunPaths') -> str:
     cache_path = run_paths.viewer_cache / cached_filename
     
     # Write file if not already cached
+    # Write file if not already cached
     if not cache_path.exists():
-        cache_path.write_bytes(bytes(content))
+        # Optimization: Write directly from memoryview/buffer to avoid RAM copy
+        with cache_path.open("wb") as f:
+            f.write(content)
     
     return str(cache_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 12: CENTRALIZED RUN STATE RESET
+# 
+# Single function to clear all run-scoped state. Uses explicit allowlist to
+# avoid nuking user preferences (gateway_profile, selection_scope, etc.)
+# Call this on: new upload, "Start New Job", or any run boundary crossing.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# reset_run_state consolidated into src/session_state.py
+
+
+def get_current_run_id() -> str:
+    """
+    Get the current run ID, or None if no run is active.
+    
+    Use this to verify run identity before accessing run-scoped state.
+    """
+    return st.session_state.get('run_id')
+
+
+def assert_run_active(context: str = "operation") -> None:
+    """
+    Assert that a run is currently active. Raises if not.
+    
+    Use at the start of any code that requires run-scoped state.
+    
+    Args:
+        context: Description of the operation requiring active run
+        
+    Raises:
+        RuntimeError: If no run is active
+    """
+    if st.session_state.get('run_id') is None:
+        raise RuntimeError(f"No active run for {context}. Call _ensure_early_run_context() first.")
+
 
 
 
@@ -295,21 +337,52 @@ def analyze_dicom_context(file_path):
             'Include': True  # Include by default so user can see it
         }
 
-# Initialize session state for download handling
-if 'processing_complete' not in st.session_state:
-    st.session_state.processing_complete = False
-if 'processed_file_path' not in st.session_state:
-    st.session_state.processed_file_path = None
-if 'processed_file_data' not in st.session_state:
-    st.session_state.processed_file_data = None
-if 'audit_text' not in st.session_state:
-    st.session_state.audit_text = None
-if 'scrub_uuid' not in st.session_state:
-    st.session_state.scrub_uuid = None
-if 'input_file_hash' not in st.session_state:
-    st.session_state.input_file_hash = None
-if 'output_file_hash' not in st.session_state:
-    st.session_state.output_file_hash = None
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 12: SESSION STATE INITIALIZATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def init_session_state_defaults():
+    """Ensure all required session state keys exist with safe defaults."""
+    ss = st.session_state
+
+    # Core run identity
+    if RUN_ID_KEY not in ss:
+        ss[RUN_ID_KEY] = None
+    if 'run_paths' not in ss:
+        ss['run_paths'] = None
+
+    # Processing State
+    if 'processing_complete' not in ss:
+        ss['processing_complete'] = False
+    if 'processed_file_path' not in ss:
+        ss['processed_file_path'] = None
+    if 'processed_file_data' not in ss:
+        ss['processed_file_data'] = None
+    
+    # Audit & Hashes
+    if 'audit_text' not in ss:
+        ss['audit_text'] = None
+    if 'scrub_uuid' not in ss:
+        ss['scrub_uuid'] = None
+    if 'input_file_hash' not in ss:
+        ss['input_file_hash'] = None
+    if 'output_file_hash' not in ss:
+        ss['output_file_hash'] = None
+
+    # Review Session
+    if 'phi_review_session' not in ss:
+        ss['phi_review_session'] = None
+
+    # Selection Scope (User Preference - Preserved)
+    if 'selection_scope' not in ss:
+        ss['selection_scope'] = SelectionScope.create_default()
+
+    # File Handling
+    if 'uploaded_dicom_files' not in ss:
+        ss['uploaded_dicom_files'] = []
+
+# Initialize defaults immediately
+init_session_state_defaults()
 
 # Global initialization of mask variables to prevent NameError
 mask_left = 0
@@ -318,20 +391,6 @@ mask_width = 0
 mask_height = 0
 frame_w = 0
 frame_h = 0
-
-# Initialize review session state for Sprint 2 burned-in PHI review
-if 'phi_review_session' not in st.session_state:
-    st.session_state.phi_review_session = None  # ReviewSession object
-
-# Phase 6: Initialize selection scope for explicit document inclusion
-if 'selection_scope' not in st.session_state:
-    st.session_state.selection_scope = SelectionScope.create_default()  # Conservative: images=True, documents=False
-
-# Phase 8: Initialize run context for operational hardening
-if 'run_id' not in st.session_state:
-    st.session_state.run_id = None  # Generated per processing run
-if 'run_paths' not in st.session_state:
-    st.session_state.run_paths = None  # RunPaths object
 
 def generate_repair_filename(original_filename: str, new_patient_id: str, series_description: str) -> str:
     """
@@ -1523,7 +1582,16 @@ def display_preview(dcm_path: str, caption: str):
             st.info(f"📄 Non-image object ({modality}). Preview is not available.")
             st.caption("This item will remain in the evidence bundle and export outputs according to policy.")
             return
-        
+            
+        # ═══════════════════════════════════════════════════════════════════════
+        # MEMORY PROTECTION: Pixel Guard
+        # ═══════════════════════════════════════════════════════════════════════
+        if not should_render_pixels(ds):
+            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
+            st.warning(f"⚠️ {modality} image too large for browser preview (>300MB raw).")
+            st.caption("Metadata will be processed normally. Pixel data is preserved in export.")
+            return
+
         arr = ds.pixel_array
         if arr.ndim == 4:
             frame = arr[len(arr)//2]
@@ -1706,7 +1774,15 @@ def _build_viewer_ordered_entries(processed_files: List[Dict], file_info_cache: 
         info = (file_info_cache or {}).get(src_name, {})  # may be empty
         
         # Build relative path within export
-        folder_path = pf.get("folder_path", "").strip("/")
+        # GOVERNANCE: Path must be strictly relative for relocatable viewer.
+        # Strip any leading system path components, drive letters, or separators.
+        folder_path = pf.get("folder_path", "")
+        # Remove drive letter if present (manual check for cross-platform safety)
+        if len(folder_path) > 1 and folder_path[1] == ":":
+            folder_path = folder_path[2:]
+        
+        folder_path = folder_path.strip(os.sep + "/")
+        
         filename = pf.get("filename", "unknown.dcm")
         dicom_rel = f"{folder_path}/{filename}" if folder_path else filename
         
@@ -1930,19 +2006,8 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🔄 Start New Job", use_container_width=True, type="secondary", key="start_new_job"):
-            # Clear all session state related to processing
-            for key in ['processing_complete', 'output_zip_buffer', 'processed_files', 'combined_audit_logs', 'processing_stats']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            # Clear mask-related session state
-            for key in ['batch_mask', 'batch_canvas_version', 'single_file_mask', 'single_canvas_version']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            # Phase 12: Clear run context for new session (new run == new state)
-            for key in ['run_id', 'run_paths', 'phi_review_session', 'manifest_selections', 'manifest_data_cache', 
-                        'manifest_file_hash', 'uploaded_dicom_files', 'file_info_cache']:
-                if key in st.session_state:
-                    del st.session_state[key]
+            # Phase 12: Centralized run state reset
+            reset_run_state(st.session_state, reason="Start New Job button clicked")
             st.rerun()
     
     # CRITICAL: Stop execution here to prevent re-running processing logic
@@ -2178,20 +2243,13 @@ if uploaded_files:
                 dicom_files.append(uploaded_file)
 
 # Store uploaded files in session state to persist across form interactions
-# Clear manifest selections if this is a new upload (different files)
+# Detect new upload and reset run state if files changed
 if 'uploaded_dicom_files' in st.session_state:
     old_names = set(fb.name for fb in st.session_state.uploaded_dicom_files)
     new_names = set(fb.name for fb in dicom_files)
     if old_names != new_names and dicom_files:
-        # New files uploaded - clear old selections and run context
-        st.session_state.manifest_selections = {}
-        # Phase 12: Reset run context for new upload (new files == new session)
-        if 'run_paths' in st.session_state:
-            del st.session_state['run_paths']
-        if 'run_id' in st.session_state:
-            del st.session_state['run_id']
-        if 'phi_review_session' in st.session_state:
-            del st.session_state['phi_review_session']
+        # Phase 12: New files uploaded - full run state reset
+        reset_run_state(st.session_state, reason="New files uploaded (different from previous)")
         
 st.session_state.uploaded_dicom_files = dicom_files
 
@@ -2354,13 +2412,18 @@ if st.session_state.get('uploaded_dicom_files'):
         with st.spinner("🔍 Analyzing file modalities..."):
             for file_buffer in selected_file_buffers:
                 try:
-                    # Create temp file for reading metadata only
-                    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".dcm")
-                    temp.write(file_buffer.getbuffer())
-                    temp.close()
+                    # ═══════════════════════════════════════════════════════════════
+                    # MEMORY FIX: Persist immediately to disk
+                    # Avoid holding multiple copies in RAM (BytesIO + pydicom read)
+                    # ═══════════════════════════════════════════════════════════════
+                    run_paths = _ensure_early_run_context()
                     
-                    # Read minimal dataset header (no pixel data)
-                    ds = pydicom.dcmread(temp.name, stop_before_pixels=True)
+                    # Persist to run-scoped storage (deduplicated by content hash)
+                    # effectively "upload straight to disk"
+                    local_path = _get_viewer_cache_path(file_buffer, run_paths)
+                    
+                    # Read minimal dataset header from DISK (no pixel data)
+                    ds = pydicom.dcmread(local_path, stop_before_pixels=True)
                     modality = str(getattr(ds, 'Modality', '')).upper()
                     series_desc = str(getattr(ds, 'SeriesDescription', '')).upper()
                     sop_class_uid = str(getattr(ds, 'SOPClassUID', ''))
@@ -2403,8 +2466,11 @@ if st.session_state.get('uploaded_dicom_files'):
                         # Unknown category (shouldn't happen) → conservative, goes to docs
                         bucket_docs.append(file_buffer)
                     
-                    # Clean up temp file
-                    os.unlink(temp.name)
+                    # Store the local path in the file buffer object for later use if needed?
+                    # Streamlit's UploadedFile object doesn't easily allow arbitrary attributes.
+                    # But since we use _get_viewer_cache_path(file_buffer) which is deterministic (hash-based),
+                    # we can just call it again later to get the same path.
+
                     
                 except Exception as e:
                     st.warning(f"Could not analyze {file_buffer.name}: {e}")
@@ -2567,7 +2633,7 @@ if st.session_state.get('uploaded_dicom_files'):
     # ═══════════════════════════════════════════════════════════════════════════════
     if preview_files and (bucket_us or bucket_docs):
         # Initialize or update review session
-        if st.session_state.phi_review_session is None:
+        if st.session_state.get("phi_review_session") is None:
             # Create new session with first available file's SOP UID
             try:
                 first_file = preview_files[0]
@@ -2578,9 +2644,9 @@ if st.session_state.get('uploaded_dicom_files'):
                     sop_uid = str(getattr(ds, 'SOPInstanceUID', 'unknown'))
                 else:
                     sop_uid = 'unknown'
-                st.session_state.phi_review_session = ReviewSession.create(sop_instance_uid=sop_uid)
+                st.session_state["phi_review_session"] = ReviewSession.create(sop_instance_uid=sop_uid)
             except Exception:
-                st.session_state.phi_review_session = ReviewSession.create(sop_instance_uid='unknown')
+                st.session_state["phi_review_session"] = ReviewSession.create(sop_instance_uid='unknown')
             
             # ═══════════════════════════════════════════════════════════════════
             # PREFLIGHT SCAN: Detect Secondary Capture and Encapsulated PDF
@@ -2601,7 +2667,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             sop_uid = str(getattr(scan_ds, 'SOPInstanceUID', ''))
                             sop_class = str(getattr(scan_ds, 'SOPClassUID', ''))
                             if sop_uid and sop_class:
-                                st.session_state.phi_review_session.register_file_uid(
+                                st.session_state.get("phi_review_session").register_file_uid(
                                     filename=f.name,
                                     sop_instance_uid=sop_uid,
                                     sop_class_uid=sop_class
@@ -2610,313 +2676,317 @@ if st.session_state.get('uploaded_dicom_files'):
                             # Preflight scan for findings
                             finding = preflight_scan_dataset(scan_ds)
                             if finding is not None:
-                                st.session_state.phi_review_session.add_finding(finding)
+                                st.session_state.get("phi_review_session").add_finding(finding)
                         except Exception:
                             pass  # Skip files that can't be read - non-fatal
             except Exception:
                 pass  # Preflight scan failure is non-fatal - do not block session
         
-        review_session = st.session_state.phi_review_session
+        review_session = st.session_state.get("phi_review_session")
         
-        # Review panel - collapsed by default
-        with st.expander("🔍 **Burned-In PHI Review** (Preview)", expanded=False):
-            st.caption("Sprint 2: Human-in-the-loop review for burned-in text regions")
-            
-            # Status badge
-            if review_session.review_accepted:
-                st.success("✅ Review accepted - ready for export")
-            elif review_session.review_started:
-                st.warning("⏳ Review in progress")
-            else:
-                st.info("📋 Review not started - regions shown below are auto-detected defaults")
-            
-            # Summary metrics - AUTHORITATIVE: Derived only from ReviewSession state
-            # This is governance-critical: UI must match audit trail
-            summary = review_session.get_summary()
-            total_regions = summary['total_regions']
-            
-            col1, col2, col3 = st.columns(3)
-            
-            # If no regions exist, detection hasn't run yet - show 'Pending' not '0'
-            # This prevents misleading UI (showing "0" when actual count is unknown)
-            if total_regions == 0 and not review_session.review_accepted:
-                with col1:
-                    st.metric("Detected Regions", "—", help="Detection runs during processing")
-                with col2:
-                    st.metric("Manual Regions", summary['manual_regions'])
-                with col3:
-                    st.metric("Will Mask", "—", help="Determined after detection")
-            else:
-                # Regions exist or review is complete - show authoritative counts
-                with col1:
-                    st.metric("Detected Regions", summary['ocr_regions'])
-                with col2:
-                    st.metric("Manual Regions", summary['manual_regions'])
-                with col3:
-                    st.metric("Will Mask", summary['will_mask'])
-            
-            # ═══════════════════════════════════════════════════════════════════
-            # PREFLIGHT FINDINGS INDICATOR (Read-Only, Informational)
-            # Shows detected Secondary Capture and Encapsulated PDF instances
-            # Freeze-safe: informational only; no gating; no export changes.
-            # ═══════════════════════════════════════════════════════════════════
-            if review_session.has_findings():
-                findings_summary = review_session.get_findings_summary()
-                sc_count = findings_summary.get('secondary_capture', 0)
-                pdf_count = findings_summary.get('encapsulated_pdf', 0)
+        # Guard: Only show review panel if review session is initialized
+        if review_session is None:
+            st.info("📋 Review session initializing... Please wait for file analysis to complete.")
+        else:
+            # Review panel - collapsed by default
+            with st.expander("🔍 **Burned-In PHI Review** (Preview)", expanded=False):
+                st.caption("Sprint 2: Human-in-the-loop review for burned-in text regions")
                 
-                # Build warning message with finding counts
-                finding_items = []
-                if sc_count > 0:
-                    finding_items.append(f"**{sc_count}** Secondary Capture image{'s' if sc_count > 1 else ''}")
-                if pdf_count > 0:
-                    finding_items.append(f"**{pdf_count}** Encapsulated PDF{'s' if pdf_count > 1 else ''}")
+                # Status badge
+                if review_session.review_accepted:
+                    st.success("✅ Review accepted - ready for export")
+                elif review_session.review_started:
+                    st.warning("⏳ Review in progress")
+                else:
+                    st.info("📋 Review not started - regions shown below are auto-detected defaults")
                 
-                findings_text = " and ".join(finding_items)
+                # Summary metrics - AUTHORITATIVE: Derived only from ReviewSession state
+                # This is governance-critical: UI must match audit trail
+                summary = review_session.get_summary()
+                total_regions = summary['total_regions']
                 
-                st.markdown("---")
-                st.warning(
-                    f"⚠️ **Non-Standard Objects Detected**\n\n"
-                    f"This study contains {findings_text}.\n\n"
-                    f"These objects are often overlooked during export. "
-                    f"Review carefully before proceeding."
-                )
-                st.caption(
-                    "ℹ️ *Secondary Capture images may contain scanned documents or screenshots. "
-                    "Encapsulated PDFs are documents embedded in DICOM format. "
-                    "Both may contain visible PHI. "
-                    "This warning is informational only and does not change masking or export.*"
-                )
+                col1, col2, col3 = st.columns(3)
                 
-                # ═══════════════════════════════════════════════════════════════
-                # PDF EXCLUSION CONTROLS (Phase 2: User-Driven, Logged)
-                # Allows operator to exclude Encapsulated PDFs from export
-                # ═══════════════════════════════════════════════════════════════
-                pdf_findings = review_session.get_pdf_findings()
-                if pdf_findings and not review_session.is_sealed():
-                    st.markdown("---")
-                    st.markdown("**📄 Encapsulated PDF Management:**")
-                    st.caption("Exclude PDFs from export. This action is logged for audit purposes.")
+                # If no regions exist, detection hasn't run yet - show 'Pending' not '0'
+                # This prevents misleading UI (showing "0" when actual count is unknown)
+                if total_regions == 0 and not review_session.review_accepted:
+                    with col1:
+                        st.metric("Detected Regions", "—", help="Detection runs during processing")
+                    with col2:
+                        st.metric("Manual Regions", summary['manual_regions'])
+                    with col3:
+                        st.metric("Will Mask", "—", help="Determined after detection")
+                else:
+                    # Regions exist or review is complete - show authoritative counts
+                    with col1:
+                        st.metric("Detected Regions", summary['ocr_regions'])
+                    with col2:
+                        st.metric("Manual Regions", summary['manual_regions'])
+                    with col3:
+                        st.metric("Will Mask", summary['will_mask'])
+            
+                # ═══════════════════════════════════════════════════════════════════
+                # PREFLIGHT FINDINGS INDICATOR (Read-Only, Informational)
+                # Shows detected Secondary Capture and Encapsulated PDF instances
+                # Freeze-safe: informational only; no gating; no export changes.
+                # ═══════════════════════════════════════════════════════════════════
+                if review_session.has_findings():
+                    findings_summary = review_session.get_findings_summary()
+                    sc_count = findings_summary.get('secondary_capture', 0)
+                    pdf_count = findings_summary.get('encapsulated_pdf', 0)
                     
-                    for idx, pdf in enumerate(pdf_findings):
-                        # Create unique key for checkbox
-                        checkbox_key = f"exclude_pdf_{pdf.sop_instance_uid[:20]}_{idx}"
+                    # Build warning message with finding counts
+                    finding_items = []
+                    if sc_count > 0:
+                        finding_items.append(f"**{sc_count}** Secondary Capture image{'s' if sc_count > 1 else ''}")
+                    if pdf_count > 0:
+                        finding_items.append(f"**{pdf_count}** Encapsulated PDF{'s' if pdf_count > 1 else ''}")
+                    
+                    findings_text = " and ".join(finding_items)
+                    
+                    st.markdown("---")
+                    st.warning(
+                        f"⚠️ **Non-Standard Objects Detected**\n\n"
+                        f"This study contains {findings_text}.\n\n"
+                        f"These objects are often overlooked during export. "
+                        f"Review carefully before proceeding."
+                    )
+                    st.caption(
+                        "ℹ️ *Secondary Capture images may contain scanned documents or screenshots. "
+                        "Encapsulated PDFs are documents embedded in DICOM format. "
+                        "Both may contain visible PHI. "
+                        "This warning is informational only and does not change masking or export.*"
+                    )
+                    
+                    # ═══════════════════════════════════════════════════════════════
+                    # PDF EXCLUSION CONTROLS (Phase 2: User-Driven, Logged)
+                    # Allows operator to exclude Encapsulated PDFs from export
+                    # ═══════════════════════════════════════════════════════════════
+                    pdf_findings = review_session.get_pdf_findings()
+                    if pdf_findings and not review_session.is_sealed():
+                        st.markdown("---")
+                        st.markdown("**📄 Encapsulated PDF Management:**")
+                        st.caption("Exclude PDFs from export. This action is logged for audit purposes.")
                         
-                        # Display checkbox with current state
-                        exclude_label = f"Exclude PDF (SOP: ...{pdf.sop_instance_uid[-12:]})"
-                        current_excluded = pdf.excluded
+                        for idx, pdf in enumerate(pdf_findings):
+                            # Create unique key for checkbox
+                            checkbox_key = f"exclude_pdf_{pdf.sop_instance_uid[:20]}_{idx}"
+                            
+                            # Display checkbox with current state
+                            exclude_label = f"Exclude PDF (SOP: ...{pdf.sop_instance_uid[-12:]})"
+                            current_excluded = pdf.excluded
+                            
+                            new_excluded = st.checkbox(
+                                exclude_label,
+                                value=current_excluded,
+                                key=checkbox_key,
+                                help=f"Series: {pdf.series_instance_uid[:20]}... | Modality: {pdf.modality or 'Unknown'}"
+                            )
+                            
+                            # Handle state change with audit logging
+                            if new_excluded != current_excluded:
+                                review_session.set_pdf_excluded(pdf.sop_instance_uid, new_excluded)
+                                
+                                # Audit log the decision
+                                try:
+                                    from audit_manager import AuditLogger
+                                    audit_logger = AuditLogger()
+                                    audit_logger.log_scrub_event(
+                                        operator_id=st.session_state.get('operator_id', 'OPERATOR'),
+                                        original_filename=f"PDF_{pdf.sop_instance_uid}",
+                                        scrub_uuid=audit_logger.generate_scrub_uuid(),
+                                        reason_code="EXCLUDE_ENCAPSULATED_PDF" if new_excluded else "INCLUDE_ENCAPSULATED_PDF",
+                                        output_filename=None,
+                                        modality=pdf.modality or "DOC",
+                                        success=True
+                                    )
+                                except Exception:
+                                    pass  # Audit logging failure is non-fatal
+                                
+                                st.rerun()
                         
-                        new_excluded = st.checkbox(
-                            exclude_label,
-                            value=current_excluded,
-                            key=checkbox_key,
-                            help=f"Series: {pdf.series_instance_uid[:20]}... | Modality: {pdf.modality or 'Unknown'}"
+                        # Show exclusion summary
+                        excluded_count = len(review_session.get_excluded_pdf_uids())
+                        if excluded_count > 0:
+                            st.info(f"📋 **{excluded_count}** PDF{'s' if excluded_count > 1 else ''} marked for exclusion from export.")
+                    
+                    elif pdf_findings and review_session.is_sealed():
+                        # Show read-only status after seal
+                        excluded_count = len(review_session.get_excluded_pdf_uids())
+                        if excluded_count > 0:
+                            st.markdown("---")
+                            st.success(f"✅ **{excluded_count}** Encapsulated PDF{'s' if excluded_count > 1 else ''} excluded from export (locked).")
+                
+                # ═══════════════════════════════════════════════════════════════════
+                # BULK ACTIONS (PR 4)
+                # ═══════════════════════════════════════════════════════════════════
+                if not review_session.is_sealed():
+                    st.markdown("**Bulk Actions:**")
+                    bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
+                    
+                    with bulk_col1:
+                        if st.button("🔴 Mask All Detected", key="bulk_mask_all", use_container_width=True):
+                            review_session.mask_all_detected()
+                            if not review_session.review_started:
+                                review_session.start_review()
+                            st.rerun()
+                    
+                    with bulk_col2:
+                        if st.button("🟢 Keep All", key="bulk_unmask_all", use_container_width=True):
+                            review_session.unmask_all()
+                            if not review_session.review_started:
+                                review_session.start_review()
+                            st.rerun()
+                    
+                    with bulk_col3:
+                        if st.button("🔄 Reset to Defaults", key="bulk_reset", use_container_width=True):
+                            review_session.reset_to_defaults()
+                            st.rerun()
+                    
+                    st.markdown("---")
+                
+                # ═══════════════════════════════════════════════════════════════════
+                # REGION LIST WITH TOGGLE BUTTONS (PR 4)
+                # ═══════════════════════════════════════════════════════════════════
+                # ═══════════════════════════════════════════════════════════════════
+                # PHASE 5A: REVIEW UX SEMANTICS (PRESENTATION-ONLY)
+                # Status: Approved | Risk: Low | Behavioral Change: None
+                #
+                # Visual elements below are derived from Phase 4 data:
+                # - Detection Strength Badges: [ OCR: HIGH/MEDIUM/LOW/? ]
+                # - Spatial Zone Labels: Zone: HEADER/BODY/FOOTER
+                # - Uncertainty Tooltips: ℹ️ for LOW strength or OCR failure
+                #
+                # INVARIANT: If these visuals are disabled, system behavior is identical.
+                # Phase 5A introduces no new decision logic and does not alter review outcomes.
+                # ═══════════════════════════════════════════════════════════════════
+                regions = review_session.get_active_regions()
+                if regions:
+                    st.markdown("**Region List:**")
+                    
+                    for idx, region in enumerate(regions):
+                        source_icon = "🔍 OCR" if region.source == RegionSource.OCR else "✏️ Manual"
+                        current_action = region.get_effective_action()
+                        action_icon = "🔴 MASK" if current_action == RegionAction.MASK else "🟢 KEEP"
+                        
+                        # Phase 5A: Generate presentation elements (no state mutation)
+                        semantics = RegionSemantics.from_region_attributes(
+                            detection_strength=region.detection_strength,
+                            region_zone=region.region_zone,
+                            source=region.source,
                         )
                         
-                        # Handle state change with audit logging
-                        if new_excluded != current_excluded:
-                            review_session.set_pdf_excluded(pdf.sop_instance_uid, new_excluded)
-                            
-                            # Audit log the decision
-                            try:
-                                from audit_manager import AuditLogger
-                                audit_logger = AuditLogger()
-                                audit_logger.log_scrub_event(
-                                    operator_id=st.session_state.get('operator_id', 'OPERATOR'),
-                                    original_filename=f"PDF_{pdf.sop_instance_uid}",
-                                    scrub_uuid=audit_logger.generate_scrub_uuid(),
-                                    reason_code="EXCLUDE_ENCAPSULATED_PDF" if new_excluded else "INCLUDE_ENCAPSULATED_PDF",
-                                    output_filename=None,
-                                    modality=pdf.modality or "DOC",
-                                    success=True
-                                )
-                            except Exception:
-                                pass  # Audit logging failure is non-fatal
-                            
-                            st.rerun()
-                    
-                    # Show exclusion summary
-                    excluded_count = len(review_session.get_excluded_pdf_uids())
-                    if excluded_count > 0:
-                        st.info(f"📋 **{excluded_count}** PDF{'s' if excluded_count > 1 else ''} marked for exclusion from export.")
-                
-                elif pdf_findings and review_session.is_sealed():
-                    # Show read-only status after seal
-                    excluded_count = len(review_session.get_excluded_pdf_uids())
-                    if excluded_count > 0:
-                        st.markdown("---")
-                        st.success(f"✅ **{excluded_count}** Encapsulated PDF{'s' if excluded_count > 1 else ''} excluded from export (locked).")
-            
-            # ═══════════════════════════════════════════════════════════════════
-            # BULK ACTIONS (PR 4)
-            # ═══════════════════════════════════════════════════════════════════
-            if not review_session.is_sealed():
-                st.markdown("**Bulk Actions:**")
-                bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
-                
-                with bulk_col1:
-                    if st.button("🔴 Mask All Detected", key="bulk_mask_all", use_container_width=True):
-                        review_session.mask_all_detected()
-                        if not review_session.review_started:
-                            review_session.start_review()
-                        st.rerun()
-                
-                with bulk_col2:
-                    if st.button("🟢 Keep All", key="bulk_unmask_all", use_container_width=True):
-                        review_session.unmask_all()
-                        if not review_session.review_started:
-                            review_session.start_review()
-                        st.rerun()
-                
-                with bulk_col3:
-                    if st.button("🔄 Reset to Defaults", key="bulk_reset", use_container_width=True):
-                        review_session.reset_to_defaults()
-                        st.rerun()
-                
-                st.markdown("---")
-            
-            # ═══════════════════════════════════════════════════════════════════
-            # REGION LIST WITH TOGGLE BUTTONS (PR 4)
-            # ═══════════════════════════════════════════════════════════════════
-            # ═══════════════════════════════════════════════════════════════════
-            # PHASE 5A: REVIEW UX SEMANTICS (PRESENTATION-ONLY)
-            # Status: Approved | Risk: Low | Behavioral Change: None
-            #
-            # Visual elements below are derived from Phase 4 data:
-            # - Detection Strength Badges: [ OCR: HIGH/MEDIUM/LOW/? ]
-            # - Spatial Zone Labels: Zone: HEADER/BODY/FOOTER
-            # - Uncertainty Tooltips: ℹ️ for LOW strength or OCR failure
-            #
-            # INVARIANT: If these visuals are disabled, system behavior is identical.
-            # Phase 5A introduces no new decision logic and does not alter review outcomes.
-            # ═══════════════════════════════════════════════════════════════════
-            regions = review_session.get_active_regions()
-            if regions:
-                st.markdown("**Region List:**")
-                
-                for idx, region in enumerate(regions):
-                    source_icon = "🔍 OCR" if region.source == RegionSource.OCR else "✏️ Manual"
-                    current_action = region.get_effective_action()
-                    action_icon = "🔴 MASK" if current_action == RegionAction.MASK else "🟢 KEEP"
-                    
-                    # Phase 5A: Generate presentation elements (no state mutation)
-                    semantics = RegionSemantics.from_region_attributes(
-                        detection_strength=region.detection_strength,
-                        region_zone=region.region_zone,
-                        source=region.source,
-                    )
-                    
-                    # Create row with info and toggle button
-                    row_col1, row_col2, row_col3, row_col4 = st.columns([1, 2, 3, 2])
-                    
-                    with row_col1:
-                        st.markdown(f"**#{idx + 1}**")
-                    
-                    with row_col2:
-                        st.markdown(source_icon)
-                    
-                    with row_col3:
-                        st.markdown(f"`({region.x}, {region.y}) {region.w}×{region.h}`")
-                    
-                    with row_col4:
-                        if review_session.is_sealed():
-                            # Show static badge if sealed
-                            st.markdown(action_icon)
-                        else:
-                            # Toggle button
-                            toggle_label = "🟢 Keep" if current_action == RegionAction.MASK else "🔴 Mask"
-                            if st.button(toggle_label, key=f"toggle_{region.region_id}", use_container_width=True):
-                                review_session.toggle_region(region.region_id)
-                                if not review_session.review_started:
-                                    review_session.start_review()
+                        # Create row with info and toggle button
+                        row_col1, row_col2, row_col3, row_col4 = st.columns([1, 2, 3, 2])
+                        
+                        with row_col1:
+                            st.markdown(f"**#{idx + 1}**")
+                        
+                        with row_col2:
+                            st.markdown(source_icon)
+                        
+                        with row_col3:
+                            st.markdown(f"`({region.x}, {region.y}) {region.w}×{region.h}`")
+                        
+                        with row_col4:
+                            if review_session.is_sealed():
+                                # Show static badge if sealed
+                                st.markdown(action_icon)
+                            else:
+                                # Toggle button
+                                toggle_label = "🟢 Keep" if current_action == RegionAction.MASK else "🔴 Mask"
+                                if st.button(toggle_label, key=f"toggle_{region.region_id}", use_container_width=True):
+                                    review_session.toggle_region(region.region_id)
+                                    if not review_session.review_started:
+                                        review_session.start_review()
+                                    st.rerun()
+                        
+                        # ═══════════════════════════════════════════════════════════════
+                        # PHASE 5A: Detection Strength Badge + Zone Label + Uncertainty
+                        # Presentation-only: No buttons, no toggles, no action language
+                        # ═══════════════════════════════════════════════════════════════
+                        if region.source == RegionSource.OCR:
+                            # Combine all Phase 5A elements into a single metadata row
+                            phase5a_html = f"""
+                            <div style="margin-left: 12px; margin-top: 2px; font-size: 0.85em; color: #8b949e;">
+                                {semantics.strength_badge_html}
+                                {semantics.zone_label_html}
+                                {semantics.uncertainty_html}
+                            </div>
+                            """
+                            st.markdown(phase5a_html, unsafe_allow_html=True)
+                        
+                        # Delete button for manual regions (on separate row to avoid crowding)
+                        if region.can_delete() and not review_session.is_sealed():
+                            if st.button(f"🗑️ Delete Region #{idx + 1}", key=f"delete_{region.region_id}"):
+                                review_session.delete_region(region.region_id)
                                 st.rerun()
-                    
-                    # ═══════════════════════════════════════════════════════════════
-                    # PHASE 5A: Detection Strength Badge + Zone Label + Uncertainty
-                    # Presentation-only: No buttons, no toggles, no action language
-                    # ═══════════════════════════════════════════════════════════════
-                    if region.source == RegionSource.OCR:
-                        # Combine all Phase 5A elements into a single metadata row
-                        phase5a_html = f"""
-                        <div style="margin-left: 12px; margin-top: 2px; font-size: 0.85em; color: #8b949e;">
-                            {semantics.strength_badge_html}
-                            {semantics.zone_label_html}
-                            {semantics.uncertainty_html}
-                        </div>
-                        """
-                        st.markdown(phase5a_html, unsafe_allow_html=True)
-                    
-                    # Delete button for manual regions (on separate row to avoid crowding)
-                    if region.can_delete() and not review_session.is_sealed():
-                        if st.button(f"🗑️ Delete Region #{idx + 1}", key=f"delete_{region.region_id}"):
-                            review_session.delete_region(region.region_id)
-                            st.rerun()
-                    
-                    # Visual separator between regions
-                    st.markdown("<div style='border-bottom: 1px solid #30363d; margin: 4px 0;'></div>", unsafe_allow_html=True)
-            else:
-                st.markdown("*No regions detected yet. Regions will appear after OCR detection runs.*")
-            
-            # ═══════════════════════════════════════════════════════════════════
-            # ADD MANUAL REGION (PR 4)
-            # ═══════════════════════════════════════════════════════════════════
-            if not review_session.is_sealed():
-                st.markdown("---")
-                st.markdown("**Add Manual Region:**")
-                st.caption("Draw a rectangle by specifying coordinates (pixels)")
-                
-                manual_col1, manual_col2, manual_col3, manual_col4 = st.columns(4)
-                with manual_col1:
-                    manual_x = st.number_input("X", min_value=0, max_value=2000, value=0, key="manual_x")
-                with manual_col2:
-                    manual_y = st.number_input("Y", min_value=0, max_value=2000, value=0, key="manual_y")
-                with manual_col3:
-                    manual_w = st.number_input("Width", min_value=1, max_value=2000, value=100, key="manual_w")
-                with manual_col4:
-                    manual_h = st.number_input("Height", min_value=1, max_value=2000, value=50, key="manual_h")
-                
-                if st.button("➕ Add Manual Region", key="add_manual_region"):
-                    review_session.add_manual_region(
-                        x=int(manual_x), 
-                        y=int(manual_y), 
-                        w=int(manual_w), 
-                        h=int(manual_h)
-                    )
-                    if not review_session.review_started:
-                        review_session.start_review()
-                    st.rerun()
-                
-                # Clear all manual regions
-                if summary['manual_regions'] > 0:
-                    if st.button("🗑️ Clear All Manual Regions", key="clear_manual"):
-                        review_session.clear_manual_regions()
-                        st.rerun()
-            
-            # ═══════════════════════════════════════════════════════════════════
-            # ACCEPT & CONTINUE (PR 5 - Accept Gating)
-            # ═══════════════════════════════════════════════════════════════════
-            st.markdown("---")
-            if review_session.is_sealed():
-                st.success("✅ Review accepted. Regions locked — ready for export.")
-            else:
-                # Show modification status
-                modified_count = len([r for r in regions if r.is_modified()])
-                if modified_count > 0:
-                    st.info(f"📝 {modified_count} region(s) modified from defaults")
-                
-                # Accept button - only shows when review has started
-                if review_session.can_accept():
-                    st.markdown("---")
-                    st.markdown("**Ready to proceed?**")
-                    st.caption("⚠️ Once accepted, region decisions are locked and cannot be changed. Original pixel data is NOT retained.")
-                    
-                    if st.button("✅ Accept & Continue", key="accept_review", type="primary", use_container_width=True):
-                        review_session.accept()
-                        st.success("✅ Review accepted! You may now proceed to export.")
-                        st.rerun()
+                        
+                        # Visual separator between regions
+                        st.markdown("<div style='border-bottom: 1px solid #30363d; margin: 4px 0;'></div>", unsafe_allow_html=True)
                 else:
-                    # Review not started yet - prompt user to interact
-                    st.caption("💡 *Toggle regions above or add manual regions to begin review.*")
+                    st.markdown("*No regions detected yet. Regions will appear after OCR detection runs.*")
+                
+                # ═══════════════════════════════════════════════════════════════════
+                # ADD MANUAL REGION (PR 4)
+                # ═══════════════════════════════════════════════════════════════════
+                if not review_session.is_sealed():
+                    st.markdown("---")
+                    st.markdown("**Add Manual Region:**")
+                    st.caption("Draw a rectangle by specifying coordinates (pixels)")
+                    
+                    manual_col1, manual_col2, manual_col3, manual_col4 = st.columns(4)
+                    with manual_col1:
+                        manual_x = st.number_input("X", min_value=0, max_value=2000, value=0, key="manual_x")
+                    with manual_col2:
+                        manual_y = st.number_input("Y", min_value=0, max_value=2000, value=0, key="manual_y")
+                    with manual_col3:
+                        manual_w = st.number_input("Width", min_value=1, max_value=2000, value=100, key="manual_w")
+                    with manual_col4:
+                        manual_h = st.number_input("Height", min_value=1, max_value=2000, value=50, key="manual_h")
+                    
+                    if st.button("➕ Add Manual Region", key="add_manual_region"):
+                        review_session.add_manual_region(
+                            x=int(manual_x), 
+                            y=int(manual_y), 
+                            w=int(manual_w), 
+                            h=int(manual_h)
+                        )
+                        if not review_session.review_started:
+                            review_session.start_review()
+                        st.rerun()
+                    
+                    # Clear all manual regions
+                    if summary['manual_regions'] > 0:
+                        if st.button("🗑️ Clear All Manual Regions", key="clear_manual"):
+                            review_session.clear_manual_regions()
+                            st.rerun()
+                
+                # ═══════════════════════════════════════════════════════════════════
+                # ACCEPT & CONTINUE (PR 5 - Accept Gating)
+                # ═══════════════════════════════════════════════════════════════════
+                st.markdown("---")
+                if review_session.is_sealed():
+                    st.success("✅ Review accepted. Regions locked — ready for export.")
+                else:
+                    # Show modification status
+                    modified_count = len([r for r in regions if r.is_modified()])
+                    if modified_count > 0:
+                        st.info(f"📝 {modified_count} region(s) modified from defaults")
+                    
+                    # Accept button - only shows when review has started
+                    if review_session.can_accept():
+                        st.markdown("---")
+                        st.markdown("**Ready to proceed?**")
+                        st.caption("⚠️ Once accepted, region decisions are locked and cannot be changed. Original pixel data is NOT retained.")
+                        
+                        if st.button("✅ Accept & Continue", key="accept_review", type="primary", use_container_width=True):
+                            review_session.accept()
+                            st.success("✅ Review accepted! You may now proceed to export.")
+                            st.rerun()
+                    else:
+                        # Review not started yet - prompt user to interact
+                        st.caption("💡 *Toggle regions above or add manual regions to begin review.*")
     
     # ═══════════════════════════════════════════════════════════════════════════════
     # PHASE 6: SERIES BROWSER + STACK NAVIGATION
@@ -4673,11 +4743,18 @@ Studies in this archive:
                                 try:
                                     # Copy viewer assets from static/
                                     static_dir = os.path.join(os.path.dirname(__file__), '..', 'static')
-                                    for asset_name in ('viewer.html', 'viewer.css', 'viewer.js'):
+                                    
+                                    # PHASE 12: Pre-flight verification of viewer assets
+                                    # Fail early with clear error instead of mysterious browser "file not found"
+                                    required_assets = ('viewer.html', 'viewer.css', 'viewer.js')
+                                    missing_assets = [n for n in required_assets if not os.path.exists(os.path.join(static_dir, n))]
+                                    if missing_assets:
+                                        raise RuntimeError(f"Export viewer assets missing from static/: {', '.join(missing_assets)}")
+                                    
+                                    for asset_name in required_assets:
                                         asset_path = os.path.join(static_dir, asset_name)
-                                        if os.path.exists(asset_path):
-                                            with open(asset_path, 'rb') as f:
-                                                zip_file.writestr(f"{root_folder}/viewer/{asset_name}", f.read())
+                                        with open(asset_path, 'rb') as f:
+                                            zip_file.writestr(f"{root_folder}/viewer/{asset_name}", f.read())
                                     
                                     # Add friendly redirect at root level
                                     redirect_html = b"<!doctype html><meta http-equiv='refresh' content='0; url=viewer/viewer.html'><title>VoxelMask Export Viewer</title>"
@@ -4701,8 +4778,15 @@ Studies in this archive:
                                     
                                     # Convert to JSON and write to ZIP
                                     import json as json_module
-                                    index_json = json_module.dumps(viewer_index.to_dict(), indent=2).encode('utf-8')
-                                    zip_file.writestr(f"{root_folder}/viewer/viewer_index.json", index_json)
+                                    index_dict = viewer_index.to_dict()
+                                    index_json = json_module.dumps(index_dict, indent=2)
+                                    
+                                    # Write standard JSON (for machine readability)
+                                    zip_file.writestr(f"{root_folder}/viewer/viewer_index.json", index_json.encode('utf-8'))
+                                    
+                                    # Write JS Global (for file:// protocol support)
+                                    index_js = viewer_index.to_js()
+                                    zip_file.writestr(f"{root_folder}/viewer/viewer_index.js", index_js.encode('utf-8'))
                                     
                                 except Exception as viewer_error:
                                     # Viewer is optional - don't fail export if viewer generation fails

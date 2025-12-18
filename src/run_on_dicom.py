@@ -23,7 +23,7 @@ from pydicom.uid import ExplicitVRLittleEndian, UID
 
 from clinical_corrector import ClinicalCorrector
 from compliance import enforce_dicom_compliance
-from utils import apply_deterministic_sanitization
+from utils import apply_deterministic_sanitization, should_render_pixels, estimate_pixel_memory
 from pixel_invariant import (
     PixelAction,
     decide_pixel_action,
@@ -812,427 +812,466 @@ def process_dicom(  # pragma: no cover
     original_photometric = getattr(ds, 'PhotometricInterpretation', 'UNKNOWN')
     print(f"Input format: {original_photometric}")
 
-    # Decompress pixels (required for OpenCV editing)
-    # Note: pydicom usually converts YBR* to RGB automatically on decompress
-    print("Decompressing pixel data...")
-    try:
-        ds.decompress()
-    except Exception as e:
-        print(f"Warning: Decompression failed or not needed: {e}")
-
-    # Get pixel array
-    try:
-        arr = ds.pixel_array.copy()  # Copy to ensure writability
-        # EVIDENCE: Compute source pixel hash BEFORE any modification (Model B backbone)
-        if evidence_bundle:
-            try:
-                source_pixel_hash = sha256_bytes(ds.PixelData)
-                evidence_bundle.add_source_hash(
-                    sop_instance_uid=source_sop_uid,
-                    pixel_hash=f"sha256:{source_pixel_hash}",
-                    series_uid=source_series_uid,
-                    instance_number=getattr(ds, 'InstanceNumber', None)
-                )
-            except Exception as he:
-                print(f"[EVIDENCE] Warning: Could not compute source hash: {he}")
-    except Exception as e:
+    # ═══════════════════════════════════════════════════════════════════════════
+    # MEMORY GUARD: SKIP PIXELS IF TOO LARGE
+    # ═══════════════════════════════════════════════════════════════════════════
+    if not should_render_pixels(ds):
+        est_bytes = estimate_pixel_memory(ds)
+        print(f"⚠️ [MEMORY GUARD] Skipping pixel processing. Estimate: {est_bytes / (1024*1024):.1f} MB (Uncompressed)")
+        
+        # Log to evidence bundle
         if evidence_bundle:
             try:
                 evidence_bundle.add_exception(
-                    exception_type="PIXEL_ARRAY_FAILURE",
-                    message=str(e),
-                    severity="ERROR",
+                    exception_type="PIXEL_PROCESSING_SKIPPED",
+                    message=f"Dataset too large for pixel processing (Estimate: {est_bytes} bytes). Metadata anonymization only.",
+                    severity="WARNING",
                     source_sop_uid=source_sop_uid
                 )
             except:
                 pass
-        raise RuntimeError(f"Failed to extract pixel array: {e}")
-
-    print(f"Original array shape: {arr.shape}, dtype: {arr.dtype}")
-
-    # Handle dimensions: ensure 4D (Frames, H, W, C)
-    original_ndim = arr.ndim
-    if arr.ndim == 2:
-        # Grayscale single frame: (H, W) -> (1, H, W, 1)
-        arr = arr[np.newaxis, :, :, np.newaxis]
-        arr = np.repeat(arr, 3, axis=3)  # Convert to RGB
-    elif arr.ndim == 3:
-        # Could be (H, W, C) single frame or (Frames, H, W) grayscale video
-        if arr.shape[2] in (3, 4):
-            # Single frame with channels: (H, W, C) -> (1, H, W, C)
-            arr = arr[np.newaxis, :, :, :]
-        else:
-            # Grayscale video: (Frames, H, W) -> (Frames, H, W, 3)
-            arr = arr[:, :, :, np.newaxis]
-            arr = np.repeat(arr, 3, axis=3)
-    elif arr.ndim == 4:
-        # Already 4D: (Frames, H, W, C)
-        if arr.shape[3] == 1:
-            # Grayscale video with channel dim
-            arr = np.repeat(arr, 3, axis=3)
-
-    print(f"Normalized array shape: {arr.shape}")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ZERO-LOSS BIT-DEPTH HANDLING
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Store original dtype for later restoration (e.g., uint16 for X-Ray)
-    original_dtype = arr.dtype
-    original_max_value = arr.max()
-    
-    # For display/OpenCV processing, we may need uint8, but we'll restore later
-    # Key insight: Mask application uses simple = 0, which works at any bit depth
-    if arr.dtype != np.uint8:
-        # Scale to uint8 ONLY for display purposes (OCR detection)
-        # Keep original array separate for final save
-        arr_original_depth = arr.copy()  # Preserve original bit-depth data
         
-        if original_max_value > 255:
-            # Scale to 8-bit for processing
-            arr = ((arr.astype(np.float32) / original_max_value) * 255).astype(np.uint8)
-            print(f"[BIT-DEPTH] Scaled from {original_dtype} (max={original_max_value}) to uint8 for processing")
-        else:
-            arr = arr.astype(np.uint8)
+        # Skip pixel processing blocks, jump to metadata
+        # We need to set arr_out to None or similar to signal "no new pixels"
+        # But wait, the code below expects arr_out.
+        # We should probably restructure the flow or wrap the HUGE block in "if render_pixels:"
+        
+        # Better strategy: Wrap the entire pixel pipeline in an else block or return early if I can refactor.
+        # Given the linear structure, let's use a flag.
+        pixel_processing_enabled = False
     else:
-        arr_original_depth = None  # Already uint8, no need for separate array
+        pixel_processing_enabled = True
 
-    # Initialize corrector
-    print("Initializing ClinicalCorrector...")
-    corrector = ClinicalCorrector()
+    # Decompress pixels (required for OpenCV editing)
+    # Note: pydicom usually converts YBR* to RGB automatically on decompress
+    if pixel_processing_enabled:
+        print("Decompressing pixel data...")
+        try:
+            ds.decompress()
+        except Exception as e:
+            print(f"Warning: Decompression failed or not needed: {e}")
 
-    frame_h, frame_w = arr.shape[1:3]
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 1: DETERMINE MASK COORDINATES (mask_list > manual_box > AI Detection)
-    # ═══════════════════════════════════════════════════════════════════════════
-    all_masks = []  # List of (x, y, w, h) tuples
+    # Get pixel array
+    if pixel_processing_enabled:
+        try:
+            arr = ds.pixel_array.copy()  # Copy to ensure writability
+            # EVIDENCE: Compute source pixel hash BEFORE any modification (Model B backbone)
+            if evidence_bundle:
+                try:
+                    source_pixel_hash = sha256_bytes(ds.PixelData)
+                    evidence_bundle.add_source_hash(
+                        sop_instance_uid=source_sop_uid,
+                        pixel_hash=f"sha256:{source_pixel_hash}",
+                        series_uid=source_series_uid,
+                        instance_number=getattr(ds, 'InstanceNumber', None)
+                    )
+                except Exception as he:
+                    print(f"[EVIDENCE] Warning: Could not compute source hash: {he}")
+        except Exception as e:
+            if evidence_bundle:
+                try:
+                    evidence_bundle.add_exception(
+                        exception_type="PIXEL_ARRAY_FAILURE",
+                        message=str(e),
+                        severity="ERROR",
+                        source_sop_uid=source_sop_uid
+                    )
+                except:
+                    pass
+            raise RuntimeError(f"Failed to extract pixel array: {e}")
     
-    if mask_list is not None and len(mask_list) > 0:
-        # Interactive redaction mode - multiple masks provided
-        print(f"[MASK] Using INTERACTIVE mask list: {len(mask_list)} region(s)")
-        all_masks = list(mask_list)
-    elif manual_box is not None:
-        # Single manual mask provided - convert to list
-        print(f"[MASK] Using MANUAL mask override: {manual_box}")
-        all_masks = [manual_box]
-    else:
-        # AI Detection fallback
-        print("[MASK] No manual mask - running AI detection...")
-        detection_result = detect_text_box_from_array(corrector, arr)
-
-        # Save debug image with RED rectangles around all detections
-        debug_frame = arr[0].copy()
-        for box in detection_result.all_detected_boxes:
-            bx, by, bw, bh = box
-            cv2.rectangle(debug_frame, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)  # RED
-        debug_path = "studies/debug_detection.png"
-        cv2.imwrite(debug_path, cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR))
-        print(f"[MASK] Debug image saved to: {debug_path} (showing {len(detection_result.all_detected_boxes)} detections)")
+        print(f"Original array shape: {arr.shape}, dtype: {arr.dtype}")
+    
+        # Handle dimensions: ensure 4D (Frames, H, W, C)
+        original_ndim = arr.ndim
+        if arr.ndim == 2:
+            # Grayscale single frame: (H, W) -> (1, H, W, 1)
+            arr = arr[np.newaxis, :, :, np.newaxis]
+            arr = np.repeat(arr, 3, axis=3)  # Convert to RGB
+        elif arr.ndim == 3:
+            # Could be (H, W, C) single frame or (Frames, H, W) grayscale video
+            if arr.shape[2] in (3, 4):
+                # Single frame with channels: (H, W, C) -> (1, H, W, C)
+                arr = arr[np.newaxis, :, :, :]
+            else:
+                # Grayscale video: (Frames, H, W) -> (Frames, H, W, 3)
+                arr = arr[:, :, :, np.newaxis]
+                arr = np.repeat(arr, 3, axis=3)
+        elif arr.ndim == 4:
+            # Already 4D: (Frames, H, W, C)
+            if arr.shape[3] == 1:
+                # Grayscale video with channel dim
+                arr = np.repeat(arr, 3, axis=3)
+    
+        print(f"Normalized array shape: {arr.shape}")
+    
+        # ═══════════════════════════════════════════════════════════════════════════
+        # ZERO-LOSS BIT-DEPTH HANDLING
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Store original dtype for later restoration (e.g., uint16 for X-Ray)
+        original_dtype = arr.dtype
+        original_max_value = arr.max()
         
-        # Phase 4: Log detection strength
-        print(f"[Phase4] Detection strength: {detection_result.detection_strength}, OCR failure: {detection_result.ocr_failure}")
+        # For display/OpenCV processing, we may need uint8, but we'll restore later
+        # Key insight: Mask application uses simple = 0, which works at any bit depth
+        if arr.dtype != np.uint8:
+            # Scale to uint8 ONLY for display purposes (OCR detection)
+            # Keep original array separate for final save
+            arr_original_depth = arr.copy()  # Preserve original bit-depth data
+            
+            if original_max_value > 255:
+                # Scale to 8-bit for processing
+                arr = ((arr.astype(np.float32) / original_max_value) * 255).astype(np.uint8)
+                print(f"[BIT-DEPTH] Scaled from {original_dtype} (max={original_max_value}) to uint8 for processing")
+            else:
+                arr = arr.astype(np.uint8)
+        else:
+            arr_original_depth = None  # Already uint8, no need for separate array
+    
+        # Initialize corrector
+        print("Initializing ClinicalCorrector...")
+        corrector = ClinicalCorrector()
+    
+        frame_h, frame_w = arr.shape[1:3]
+    
+        # ═══════════════════════════════════════════════════════════════════════════
+        # STEP 1: DETERMINE MASK COORDINATES (mask_list > manual_box > AI Detection)
+        # ═══════════════════════════════════════════════════════════════════════════
+        all_masks = []  # List of (x, y, w, h) tuples
         
-        # EVIDENCE: Log detection results (NO PHI text stored - only locations/confidence)
-        if evidence_bundle and detection_result.all_detected_boxes:
+        if mask_list is not None and len(mask_list) > 0:
+            # Interactive redaction mode - multiple masks provided
+            print(f"[MASK] Using INTERACTIVE mask list: {len(mask_list)} region(s)")
+            all_masks = list(mask_list)
+        elif manual_box is not None:
+            # Single manual mask provided - convert to list
+            print(f"[MASK] Using MANUAL mask override: {manual_box}")
+            all_masks = [manual_box]
+        else:
+            # AI Detection fallback
+            print("[MASK] No manual mask - running AI detection...")
+            detection_result = detect_text_box_from_array(corrector, arr)
+    
+            # Save debug image with RED rectangles around all detections
+            debug_frame = arr[0].copy()
+            for box in detection_result.all_detected_boxes:
+                bx, by, bw, bh = box
+                cv2.rectangle(debug_frame, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)  # RED
+            debug_path = "studies/debug_detection.png"
+            cv2.imwrite(debug_path, cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR))
+            print(f"[MASK] Debug image saved to: {debug_path} (showing {len(detection_result.all_detected_boxes)} detections)")
+            
+            # Phase 4: Log detection strength
+            print(f"[Phase4] Detection strength: {detection_result.detection_strength}, OCR failure: {detection_result.ocr_failure}")
+            
+            # EVIDENCE: Log detection results (NO PHI text stored - only locations/confidence)
+            if evidence_bundle and detection_result.all_detected_boxes:
+                try:
+                    modality = str(getattr(ds, 'Modality', 'UNKNOWN'))
+                    for i, box in enumerate(detection_result.all_detected_boxes):
+                        confidence = detection_result.confidence_scores[i] if i < len(detection_result.confidence_scores) else 0.0
+                        zone = detection_result.region_zones[i] if detection_result.region_zones and i < len(detection_result.region_zones) else "BODY"
+                        evidence_bundle.add_detection(
+                            source_sop_uid=source_sop_uid,
+                            bbox=list(box),
+                            confidence=confidence,
+                            region=zone,
+                            engine="PaddleOCR",
+                            engine_version="2.7.0",
+                            ruleset_id=f"{modality}_ZONE",
+                            config_hash="sha256:runtime",
+                            frame_index=None
+                        )
+                except Exception as de:
+                    print(f"[EVIDENCE] Warning: Could not log detection: {de}")
+    
+            # Use default region if detection fails
+            text_box = detection_result.static_box
+            if text_box is None:
+                print("[MASK] No text detected, using default top-left region")
+                text_box = (10, 10, 200, 30)
+            else:
+                print(f"[MASK] Detected text box: {text_box}")
+    
+            x, y, w, h = text_box
+    
+            # Add padding
+            padding = 5
+            x = max(0, x - padding)
+            y = max(0, y - padding)
+            w = min(frame_w - x, w + 2 * padding)
+            h = min(frame_h - y, h + 2 * padding)
+    
+            all_masks = [(x, y, w, h)]
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # STEP 2: THE UNIVERSAL ERASER - Draw black boxes for ALL masks
+        # Apply to BOTH 8-bit display array AND original bit-depth array (zero-loss)
+        # ═══════════════════════════════════════════════════════════════════════════
+        num_frames = arr.shape[0]
+        print(f"[PIXEL SCRUB] Drawing {len(all_masks)} BLACK BOX(es) on {num_frames} frame(s)...")
+        
+        for i in range(num_frames):
+            frame = arr[i]
+            # Also get original depth frame if available
+            frame_orig = arr_original_depth[i] if arr_original_depth is not None else None
+            
+            for mask_idx, (x, y, w, h) in enumerate(all_masks):
+                # Clamp coordinates to frame boundaries
+                x_end = min(x + w, frame_w)
+                y_end = min(y + h, frame_h)
+                x_start = max(0, x)
+                y_start = max(0, y)
+                
+                # DRAW THE BLACK BOX - This is the universal eraser
+                # Apply to 8-bit display array
+                frame[y_start:y_end, x_start:x_end] = 0
+                
+                # ZERO-LOSS: Also apply to original bit-depth array
+                if frame_orig is not None:
+                    frame_orig[y_start:y_end, x_start:x_end] = 0
+            
+            if (i + 1) % 10 == 0 or i == num_frames - 1:
+                print(f"  [PIXEL SCRUB] Erased frame {i + 1}/{num_frames}")
+        
+        print(f"[PIXEL SCRUB] {len(all_masks)} BLACK BOX(es) applied to all frames")
+        if arr_original_depth is not None:
+            print(f"[ZERO-LOSS] Masks also applied to original {original_dtype} data")
+        
+        # EVIDENCE: Log masking actions (what was done, not what was found)
+        if evidence_bundle and all_masks:
             try:
-                modality = str(getattr(ds, 'Modality', 'UNKNOWN'))
-                for i, box in enumerate(detection_result.all_detected_boxes):
-                    confidence = detection_result.confidence_scores[i] if i < len(detection_result.confidence_scores) else 0.0
-                    zone = detection_result.region_zones[i] if detection_result.region_zones and i < len(detection_result.region_zones) else "BODY"
-                    evidence_bundle.add_detection(
-                        source_sop_uid=source_sop_uid,
-                        bbox=list(box),
-                        confidence=confidence,
-                        region=zone,
-                        engine="PaddleOCR",
-                        engine_version="2.7.0",
-                        ruleset_id=f"{modality}_ZONE",
-                        config_hash="sha256:runtime",
+                for mask_idx, (mx, my, mw, mh) in enumerate(all_masks):
+                    evidence_bundle.add_masking_action(
+                        masked_sop_uid="PENDING",  # Will be updated after UID generation
+                        action_type="black_box",
+                        bbox_applied=[mx, my, mw, mh],
+                        parameters={"color": [0, 0, 0], "padding": 5},
+                        result="success",
+                        reason=None,
                         frame_index=None
                     )
-            except Exception as de:
-                print(f"[EVIDENCE] Warning: Could not log detection: {de}")
-
-        # Use default region if detection fails
-        text_box = detection_result.static_box
-        if text_box is None:
-            print("[MASK] No text detected, using default top-left region")
-            text_box = (10, 10, 200, 30)
-        else:
-            print(f"[MASK] Detected text box: {text_box}")
-
-        x, y, w, h = text_box
-
-        # Add padding
-        padding = 5
-        x = max(0, x - padding)
-        y = max(0, y - padding)
-        w = min(frame_w - x, w + 2 * padding)
-        h = min(frame_h - y, h + 2 * padding)
-
-        all_masks = [(x, y, w, h)]
-    
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 2: THE UNIVERSAL ERASER - Draw black boxes for ALL masks
-    # Apply to BOTH 8-bit display array AND original bit-depth array (zero-loss)
-    # ═══════════════════════════════════════════════════════════════════════════
-    num_frames = arr.shape[0]
-    print(f"[PIXEL SCRUB] Drawing {len(all_masks)} BLACK BOX(es) on {num_frames} frame(s)...")
-    
-    for i in range(num_frames):
-        frame = arr[i]
-        # Also get original depth frame if available
-        frame_orig = arr_original_depth[i] if arr_original_depth is not None else None
+            except Exception as me:
+                print(f"[EVIDENCE] Warning: Could not log masking action: {me}")
         
-        for mask_idx, (x, y, w, h) in enumerate(all_masks):
-            # Clamp coordinates to frame boundaries
+        # Use first mask for text overlay positioning (if any masks exist)
+        if all_masks:
+            x, y, w, h = all_masks[0]
+        else:
+            x, y, w, h = 10, 10, 200, 30  # Default fallback
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # STEP 3: THE CONDITIONAL PEN - Write text overlay for BOTH modes
+        # ═══════════════════════════════════════════════════════════════════════════
+        if research_context:
+            # Research mode - construct comprehensive research label (Clinical Trial format)
+            trial_id = research_context.get('trial_id', research_context.get('study_id', 'TRIAL'))
+            site_id = research_context.get('site_id', 'SITE-01')
+            subject_id = research_context.get('subject_id', 'SUB-001')
+            time_point = research_context.get('time_point', 'Baseline')
+            
+            # Build standard Clinical Trial header: "{TrialID} | Site: {SiteID} | Sub: {SubjectID} | {Timepoint} | {ScanDate}"
+            overlay_text = f"{trial_id} | Site: {site_id} | Sub: {subject_id} | {time_point} | {scan_datetime}"
+            print(f"[MODE] Research De-ID: Overlaying '{overlay_text}'")
+        elif clinical_context and clinical_context.get('patient_name'):
+            # Clinical mode with full context - build Toshiba/Aplio style header
+            # Line 1: [Accession]:PATIENT NAME | [Sex] [Age] | [Date]
+            # Line 2: [Location] | [Study Type] | [GA] | [Sonographer] | [Time]
+            
+            patient_name = clinical_context.get('patient_name', new_name_text)
+            accession = clinical_context.get('accession_number', '')
+            patient_sex = clinical_context.get('patient_sex', '')
+            patient_dob = clinical_context.get('patient_dob', '')
+            study_date_str = clinical_context.get('study_date', '')
+            study_time_str = clinical_context.get('study_time', '')
+            location = clinical_context.get('location', '')
+            study_type = clinical_context.get('study_type', '')
+            gestational_age = clinical_context.get('gestational_age', '')
+            sonographer = clinical_context.get('sonographer', '')
+            
+            # Calculate age if DOB provided
+            age_str = ''
+            if patient_dob:
+                try:
+                    from datetime import datetime, date
+                    dob = datetime.strptime(patient_dob, '%Y-%m-%d').date()
+                    today = date.today()
+                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                    age_str = str(age)
+                except:
+                    pass
+            
+            # Format date for display (YYYY-MM-DD -> DD/MM/YYYY)
+            display_date = ''
+            if study_date_str:
+                try:
+                    parts = study_date_str.split('-')
+                    if len(parts) == 3:
+                        display_date = f"{parts[2]}/{parts[1]}/{parts[0]}"
+                except:
+                    display_date = study_date_str
+            
+            # Format time for display (HH:MM:SS -> H:MM:SS PM)
+            display_time = ''
+            if study_time_str:
+                try:
+                    from datetime import datetime
+                    t = datetime.strptime(study_time_str, '%H:%M:%S')
+                    display_time = t.strftime('%I:%M:%S %p').lstrip('0')
+                except:
+                    display_time = study_time_str
+            
+            # Build Line 1: Accession:NAME | Sex Age | Date
+            line1_parts = []
+            if accession:
+                line1_parts.append(f"{accession}:{patient_name}")
+            else:
+                line1_parts.append(patient_name)
+            
+            if patient_sex or age_str:
+                sex_age = f"{patient_sex} {age_str}".strip()
+                line1_parts.append(sex_age)
+            
+            if display_date:
+                line1_parts.append(display_date)
+            
+            line1 = "  |  ".join(line1_parts) if len(line1_parts) > 1 else line1_parts[0] if line1_parts else patient_name
+            
+            # Build Line 2: Location | Type | GA | Sonographer | Time
+            line2_parts = []
+            if location:
+                line2_parts.append(location)
+            if study_type:
+                line2_parts.append(study_type)
+            if gestational_age:
+                line2_parts.append(gestational_age)
+            if sonographer:
+                line2_parts.append(sonographer)
+            if display_time:
+                line2_parts.append(display_time)
+            
+            line2 = "  |  ".join(line2_parts) if line2_parts else ''
+            
+            # Combine lines
+            if line2:
+                overlay_text = f"{line1}\n{line2}"
+            else:
+                overlay_text = line1
+            
+            print(f"[MODE] Clinical Correction (Full): Overlaying '{overlay_text}'")
+        else:
+            # Clinical mode - basic, just display new patient name
+            overlay_text = new_name_text
+            print(f"[MODE] Clinical Correction (Basic): Overlaying '{overlay_text}'")
+        
+        # Generate and apply overlay for both modes (with auto-scaling for long text)
+        # For multi-line text, we need to handle it specially
+        overlay = corrector.generate_medical_overlay(overlay_text, w, h, auto_scale=True)
+        
+        for i in range(num_frames):
+            frame = arr[i]
+            # Apply overlay on top of the black box
             x_end = min(x + w, frame_w)
             y_end = min(y + h, frame_h)
             x_start = max(0, x)
             y_start = max(0, y)
+            actual_w = x_end - x_start
+            actual_h = y_end - y_start
             
-            # DRAW THE BLACK BOX - This is the universal eraser
-            # Apply to 8-bit display array
-            frame[y_start:y_end, x_start:x_end] = 0
+            if actual_w > 0 and actual_h > 0:
+                overlay_resized = overlay[:actual_h, :actual_w]
+                frame[y_start:y_start + actual_h, x_start:x_start + actual_w] = overlay_resized
             
-            # ZERO-LOSS: Also apply to original bit-depth array
-            if frame_orig is not None:
-                frame_orig[y_start:y_end, x_start:x_end] = 0
-        
-        if (i + 1) % 10 == 0 or i == num_frames - 1:
-            print(f"  [PIXEL SCRUB] Erased frame {i + 1}/{num_frames}")
+            if (i + 1) % 10 == 0 or i == num_frames - 1:
+                print(f"  [OVERLAY] Applied to frame {i + 1}/{num_frames}")
     
-    print(f"[PIXEL SCRUB] {len(all_masks)} BLACK BOX(es) applied to all frames")
-    if arr_original_depth is not None:
-        print(f"[ZERO-LOSS] Masks also applied to original {original_dtype} data")
-    
-    # EVIDENCE: Log masking actions (what was done, not what was found)
-    if evidence_bundle and all_masks:
-        try:
-            for mask_idx, (mx, my, mw, mh) in enumerate(all_masks):
-                evidence_bundle.add_masking_action(
-                    masked_sop_uid="PENDING",  # Will be updated after UID generation
-                    action_type="black_box",
-                    bbox_applied=[mx, my, mw, mh],
-                    parameters={"color": [0, 0, 0], "padding": 5},
-                    result="success",
-                    reason=None,
-                    frame_index=None
-                )
-        except Exception as me:
-            print(f"[EVIDENCE] Warning: Could not log masking action: {me}")
-    
-    # Use first mask for text overlay positioning (if any masks exist)
-    if all_masks:
-        x, y, w, h = all_masks[0]
-    else:
-        x, y, w, h = 10, 10, 200, 30  # Default fallback
-    
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 3: THE CONDITIONAL PEN - Write text overlay for BOTH modes
-    # ═══════════════════════════════════════════════════════════════════════════
-    if research_context:
-        # Research mode - construct comprehensive research label (Clinical Trial format)
-        trial_id = research_context.get('trial_id', research_context.get('study_id', 'TRIAL'))
-        site_id = research_context.get('site_id', 'SITE-01')
-        subject_id = research_context.get('subject_id', 'SUB-001')
-        time_point = research_context.get('time_point', 'Baseline')
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PREPARE PIXEL DATA FOR DICOM - MODALITY-AWARE OUTPUT
+        # ═══════════════════════════════════════════════════════════════════════════
+        print("Preparing pixel data for DICOM...")
         
-        # Build standard Clinical Trial header: "{TrialID} | Site: {SiteID} | Sub: {SubjectID} | {Timepoint} | {ScanDate}"
-        overlay_text = f"{trial_id} | Site: {site_id} | Sub: {subject_id} | {time_point} | {scan_datetime}"
-        print(f"[MODE] Research De-ID: Overlaying '{overlay_text}'")
-    elif clinical_context and clinical_context.get('patient_name'):
-        # Clinical mode with full context - build Toshiba/Aplio style header
-        # Line 1: [Accession]:PATIENT NAME | [Sex] [Age] | [Date]
-        # Line 2: [Location] | [Study Type] | [GA] | [Sonographer] | [Time]
+        # Get modality for output format decision
+        modality = getattr(ds, 'Modality', 'US').upper()
         
-        patient_name = clinical_context.get('patient_name', new_name_text)
-        accession = clinical_context.get('accession_number', '')
-        patient_sex = clinical_context.get('patient_sex', '')
-        patient_dob = clinical_context.get('patient_dob', '')
-        study_date_str = clinical_context.get('study_date', '')
-        study_time_str = clinical_context.get('study_time', '')
-        location = clinical_context.get('location', '')
-        study_type = clinical_context.get('study_type', '')
-        gestational_age = clinical_context.get('gestational_age', '')
-        sonographer = clinical_context.get('sonographer', '')
+        # Decide output format based on modality
+        # XR, CR, DX = Radiography (preserve grayscale, original bit-depth)
+        # US, XA = Ultrasound/Angio (RGB overlay acceptable)
+        # CT, MR = Cross-sectional (usually grayscale)
+        preserve_grayscale = modality in ['XR', 'CR', 'DX', 'CT', 'MR', 'PT', 'NM']
         
-        # Calculate age if DOB provided
-        age_str = ''
-        if patient_dob:
-            try:
-                from datetime import datetime, date
-                dob = datetime.strptime(patient_dob, '%Y-%m-%d').date()
-                today = date.today()
-                age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                age_str = str(age)
-            except:
-                pass
-        
-        # Format date for display (YYYY-MM-DD -> DD/MM/YYYY)
-        display_date = ''
-        if study_date_str:
-            try:
-                parts = study_date_str.split('-')
-                if len(parts) == 3:
-                    display_date = f"{parts[2]}/{parts[1]}/{parts[0]}"
-            except:
-                display_date = study_date_str
-        
-        # Format time for display (HH:MM:SS -> H:MM:SS PM)
-        display_time = ''
-        if study_time_str:
-            try:
-                from datetime import datetime
-                t = datetime.strptime(study_time_str, '%H:%M:%S')
-                display_time = t.strftime('%I:%M:%S %p').lstrip('0')
-            except:
-                display_time = study_time_str
-        
-        # Build Line 1: Accession:NAME | Sex Age | Date
-        line1_parts = []
-        if accession:
-            line1_parts.append(f"{accession}:{patient_name}")
+        if preserve_grayscale and arr_original_depth is not None:
+            # ═══════════════════════════════════════════════════════════════════════
+            # ZERO-LOSS PATH: Use original bit-depth data (16-bit for X-Ray etc)
+            # ═══════════════════════════════════════════════════════════════════════
+            print(f"[ZERO-LOSS] Using original {original_dtype} data for {modality} modality")
+            
+            # Use the masked original depth array (grayscale)
+            if arr_original_depth.shape[3] == 3:
+                # Convert RGB back to grayscale (take first channel or average)
+                arr_out = arr_original_depth[:, :, :, 0]  # Shape: (Frames, H, W)
+            else:
+                arr_out = arr_original_depth[:, :, :, 0] if arr_original_depth.shape[3] == 1 else arr_original_depth
+            
+            # For single frame, remove frame dimension
+            if arr_out.shape[0] == 1:
+                arr_out = arr_out[0]  # Shape: (H, W)
+            
+            print(f"Output array shape: {arr_out.shape}, dtype: {arr_out.dtype}")
+            
+            # Update DICOM header for grayscale
+            ds.PhotometricInterpretation = original_photometric if 'MONOCHROME' in original_photometric else 'MONOCHROME2'
+            ds.SamplesPerPixel = 1
+            if hasattr(ds, 'PlanarConfiguration'):
+                del ds.PlanarConfiguration
+            
+            # Preserve original bit depth
+            if original_dtype == np.uint16:
+                ds.BitsAllocated = 16
+                ds.BitsStored = 16
+                ds.HighBit = 15
+            else:
+                ds.BitsAllocated = 8
+                ds.BitsStored = 8
+                ds.HighBit = 7
+            ds.PixelRepresentation = 0  # Unsigned
+            
         else:
-            line1_parts.append(patient_name)
-        
-        if patient_sex or age_str:
-            sex_age = f"{patient_sex} {age_str}".strip()
-            line1_parts.append(sex_age)
-        
-        if display_date:
-            line1_parts.append(display_date)
-        
-        line1 = "  |  ".join(line1_parts) if len(line1_parts) > 1 else line1_parts[0] if line1_parts else patient_name
-        
-        # Build Line 2: Location | Type | GA | Sonographer | Time
-        line2_parts = []
-        if location:
-            line2_parts.append(location)
-        if study_type:
-            line2_parts.append(study_type)
-        if gestational_age:
-            line2_parts.append(gestational_age)
-        if sonographer:
-            line2_parts.append(sonographer)
-        if display_time:
-            line2_parts.append(display_time)
-        
-        line2 = "  |  ".join(line2_parts) if line2_parts else ''
-        
-        # Combine lines
-        if line2:
-            overlay_text = f"{line1}\n{line2}"
-        else:
-            overlay_text = line1
-        
-        print(f"[MODE] Clinical Correction (Full): Overlaying '{overlay_text}'")
-    else:
-        # Clinical mode - basic, just display new patient name
-        overlay_text = new_name_text
-        print(f"[MODE] Clinical Correction (Basic): Overlaying '{overlay_text}'")
-    
-    # Generate and apply overlay for both modes (with auto-scaling for long text)
-    # For multi-line text, we need to handle it specially
-    overlay = corrector.generate_medical_overlay(overlay_text, w, h, auto_scale=True)
-    
-    for i in range(num_frames):
-        frame = arr[i]
-        # Apply overlay on top of the black box
-        x_end = min(x + w, frame_w)
-        y_end = min(y + h, frame_h)
-        x_start = max(0, x)
-        y_start = max(0, y)
-        actual_w = x_end - x_start
-        actual_h = y_end - y_start
-        
-        if actual_w > 0 and actual_h > 0:
-            overlay_resized = overlay[:actual_h, :actual_w]
-            frame[y_start:y_start + actual_h, x_start:x_start + actual_w] = overlay_resized
-        
-        if (i + 1) % 10 == 0 or i == num_frames - 1:
-            print(f"  [OVERLAY] Applied to frame {i + 1}/{num_frames}")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PREPARE PIXEL DATA FOR DICOM - MODALITY-AWARE OUTPUT
-    # ═══════════════════════════════════════════════════════════════════════════
-    print("Preparing pixel data for DICOM...")
-    
-    # Get modality for output format decision
-    modality = getattr(ds, 'Modality', 'US').upper()
-    
-    # Decide output format based on modality
-    # XR, CR, DX = Radiography (preserve grayscale, original bit-depth)
-    # US, XA = Ultrasound/Angio (RGB overlay acceptable)
-    # CT, MR = Cross-sectional (usually grayscale)
-    preserve_grayscale = modality in ['XR', 'CR', 'DX', 'CT', 'MR', 'PT', 'NM']
-    
-    if preserve_grayscale and arr_original_depth is not None:
-        # ═══════════════════════════════════════════════════════════════════════
-        # ZERO-LOSS PATH: Use original bit-depth data (16-bit for X-Ray etc)
-        # ═══════════════════════════════════════════════════════════════════════
-        print(f"[ZERO-LOSS] Using original {original_dtype} data for {modality} modality")
-        
-        # Use the masked original depth array (grayscale)
-        if arr_original_depth.shape[3] == 3:
-            # Convert RGB back to grayscale (take first channel or average)
-            arr_out = arr_original_depth[:, :, :, 0]  # Shape: (Frames, H, W)
-        else:
-            arr_out = arr_original_depth[:, :, :, 0] if arr_original_depth.shape[3] == 1 else arr_original_depth
-        
-        # For single frame, remove frame dimension
-        if arr_out.shape[0] == 1:
-            arr_out = arr_out[0]  # Shape: (H, W)
-        
-        print(f"Output array shape: {arr_out.shape}, dtype: {arr_out.dtype}")
-        
-        # Update DICOM header for grayscale
-        ds.PhotometricInterpretation = original_photometric if 'MONOCHROME' in original_photometric else 'MONOCHROME2'
-        ds.SamplesPerPixel = 1
-        if hasattr(ds, 'PlanarConfiguration'):
-            del ds.PlanarConfiguration
-        
-        # Preserve original bit depth
-        if original_dtype == np.uint16:
-            ds.BitsAllocated = 16
-            ds.BitsStored = 16
-            ds.HighBit = 15
-        else:
+            # ═══════════════════════════════════════════════════════════════════════
+            # STANDARD PATH: RGB output (for US, XA with overlay)
+            # ═══════════════════════════════════════════════════════════════════════
+            print(f"[STANDARD] Using RGB output for {modality} modality")
+            
+            # Keep as 4D RGB array (Frames, H, W, 3) - ensure 3 channels
+            if arr.shape[3] == 4:
+                # Remove alpha channel if present
+                arr = arr[:, :, :, :3]
+            
+            # Safety cast: ensure uint8 (0-255)
+            arr = arr.astype(np.uint8)
+            
+            # For single frame, remove the frame dimension
+            if arr.shape[0] == 1:
+                arr_out = arr[0]  # Shape: (H, W, 3)
+            else:
+                arr_out = arr  # Shape: (Frames, H, W, 3)
+            
+            print(f"Output array shape: {arr_out.shape}, dtype: {arr_out.dtype}")
+            
+            # Update DICOM header for RGB
+            ds.PhotometricInterpretation = "RGB"
+            ds.SamplesPerPixel = 3
+            ds.PlanarConfiguration = 0  # Interleaved
             ds.BitsAllocated = 8
             ds.BitsStored = 8
             ds.HighBit = 7
-        ds.PixelRepresentation = 0  # Unsigned
-        
+            ds.PixelRepresentation = 0
     else:
-        # ═══════════════════════════════════════════════════════════════════════
-        # STANDARD PATH: RGB output (for US, XA with overlay)
-        # ═══════════════════════════════════════════════════════════════════════
-        print(f"[STANDARD] Using RGB output for {modality} modality")
-        
-        # Keep as 4D RGB array (Frames, H, W, 3) - ensure 3 channels
-        if arr.shape[3] == 4:
-            # Remove alpha channel if present
-            arr = arr[:, :, :, :3]
-        
-        # Safety cast: ensure uint8 (0-255)
-        arr = arr.astype(np.uint8)
-        
-        # For single frame, remove the frame dimension
-        if arr.shape[0] == 1:
-            arr_out = arr[0]  # Shape: (H, W, 3)
-        else:
-            arr_out = arr  # Shape: (Frames, H, W, 3)
-        
-        print(f"Output array shape: {arr_out.shape}, dtype: {arr_out.dtype}")
-        
-        # Update DICOM header for RGB
-        ds.PhotometricInterpretation = "RGB"
-        ds.SamplesPerPixel = 3
-        ds.PlanarConfiguration = 0  # Interleaved
-        ds.BitsAllocated = 8
-        ds.BitsStored = 8
-        ds.HighBit = 7
-        ds.PixelRepresentation = 0
+        # Pixel processing disabled (Memory Guard)
+        # We perform NO pixel operations. We just keep the original PixelData as is.
+        # However, we must ensure we don't accidentally write broken pixel data.
+        print("[MEMORY GUARD] Bypassing pixel manipulation/masking pipeline.")
+        arr_out = None  # Signal that we have no new array
 
     # Update DICOM header and anonymize metadata
     print("Updating DICOM metadata...")
@@ -1258,11 +1297,12 @@ def process_dicom(  # pragma: no cover
     elif hasattr(ds, 'NumberOfFrames'):
         del ds.NumberOfFrames
 
-    # Update pixel data
-    ds.PixelData = arr_out.tobytes()
+    # Update pixel data (ONLY if we processed it)
+    if pixel_processing_enabled and arr_out is not None:
+        ds.PixelData = arr_out.tobytes()
 
-    # Reset compression to Explicit VR Little Endian (uncompressed)
-    ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+        # Reset compression to Explicit VR Little Endian (uncompressed) only if we changed pixels
+        ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
 
     # Save the modified DICOM
     print(f"Saving to: {output_path}")

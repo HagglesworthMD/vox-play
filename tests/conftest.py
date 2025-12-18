@@ -6,10 +6,46 @@ import os
 import zipfile
 
 import pytest
-import pydicom
-from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
-from pydicom.uid import ExplicitVRLittleEndian
-import numpy as np
+
+# Strict dependency checking for imaging stack
+# Allows tests_unit to run without these if VOXELMASK_PURE_UNIT=1 is set
+try:
+    import pydicom
+    from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
+    from pydicom.uid import ExplicitVRLittleEndian
+    HAS_PYDICOM = True
+except ImportError as e:
+    if os.environ.get("VOXELMASK_PURE_UNIT") == "1":
+        HAS_PYDICOM = False
+    else:
+        raise RuntimeError(
+            "pydicom is required for tests/. Run within the correct .venv or "
+            "set VOXELMASK_PURE_UNIT=1 to run pure logic tests only."
+        ) from e
+
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError as e:
+    if os.environ.get("VOXELMASK_PURE_UNIT") == "1":
+        HAS_NUMPY = False
+    else:
+        raise RuntimeError(
+            "numpy is required for tests/. Run within the correct .venv or "
+            "set VOXELMASK_PURE_UNIT=1 to run pure logic tests only."
+        ) from e
+
+
+def skip_if_no_imaging():
+    """Helper to skip tests if imaging stack is missing."""
+    if not HAS_PYDICOM or not HAS_NUMPY:
+        pytest.skip("Imaging stack (pydicom/numpy) missing")
+
+
+@pytest.fixture(autouse=False)
+def imaging_stack():
+    """Fixture to ensure imaging stack is available."""
+    skip_if_no_imaging()
 
 
 def write_minimal_dicom(path: str, modality: str = "US") -> str:
@@ -33,6 +69,7 @@ def write_minimal_dicom(path: str, modality: str = "US") -> str:
     Returns:
         str: The path that was written to (same as input)
     """
+    skip_if_no_imaging()
     # Create file meta dataset first
     meta = FileMetaDataset()
     meta.MediaStorageSOPClassUID = pydicom.uid.SecondaryCaptureImageStorage
@@ -115,6 +152,7 @@ def create_dummy_dicom(filepath: str, patient_name: str = "Test^Patient",
     Returns:
         str: Path to the created DICOM file
     """
+    skip_if_no_imaging()
     # Create a minimal DICOM dataset
     file_meta = pydicom.Dataset()
     file_meta.MediaStorageSOPClassUID = pydicom.uid.CTImageStorage

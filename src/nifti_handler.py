@@ -26,6 +26,7 @@ from datetime import datetime
 # Core dependencies - required
 import numpy as np
 import pydicom
+from utils import should_render_pixels
 
 # NIfTI libraries - optional (not needed for core DICOM processing)
 NIFTI_AVAILABLE = False
@@ -255,6 +256,13 @@ class NiftiConverter:
                     
                     # Check for pixel data
                     if not hasattr(ds, 'PixelData') or ds.PixelData is None:
+                        result.failed_files.append(dcm_path)
+                        continue
+                    
+                    # Memory Guard: Check size before accessing pixel_array
+                    if not should_render_pixels(ds):
+                        logger.warning(f"Skipping NIfTI conversion for large file: {dcm_path}")
+                        result.warnings.append(f"Skipped large file (>300MB raw): {os.path.basename(dcm_path)}")
                         result.failed_files.append(dcm_path)
                         continue
                     

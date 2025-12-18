@@ -70,13 +70,20 @@ async function init() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function loadIndex() {
-    const response = await fetch('viewer_index.json');
+    // Try global variable first (supports file:// protocol)
+    if (window.VOXELMASK_VIEWER_INDEX) {
+        viewerState.index = window.VOXELMASK_VIEWER_INDEX;
+        console.log('Loaded viewer index from JS global (file:// optimization)');
+    } else {
+        // Fallback to fetch (requires HTTP/server or relaxed sandbox)
+        const response = await fetch('viewer_index.json');
 
-    if (!response.ok) {
-        throw new Error(`Could not load viewer_index.json (${response.status})`);
+        if (!response.ok) {
+            throw new Error(`Could not load viewer_index.json (${response.status})`);
+        }
+
+        viewerState.index = await response.json();
     }
-
-    viewerState.index = await response.json();
 
     // Validate required fields (do NOT modify data)
     if (!viewerState.index.series) {

@@ -135,6 +135,15 @@ class ViewerIndex:
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)
 
+    def to_js(self, indent: int = 2) -> str:
+        """
+        Convert to browser-compatible JavaScript global.
+        Used for file:// protocol support where fetch() is restricted.
+        """
+        # GOVERNANCE: Use exact same JSON content, just wrapped in global assignment
+        json_content = self.to_json(indent=indent)
+        return f"window.VOXELMASK_VIEWER_INDEX = {json_content};"
+
 
 # Type alias for entry dict (from export manifest)
 ViewerIndexEntry = Dict[str, Any]
@@ -243,12 +252,22 @@ def generate_viewer_index(
         f"{total_instances} instances, source={ordering_source}"
     )
     
-    # Write to file if path provided
+    # Write to files if path provided
     if output_path is not None:
-        output_file = Path(output_path) / "viewer_index.json"
-        with open(output_file, 'w', encoding='utf-8') as f:
+        out_dir = Path(output_path)
+        
+        # 1. Write standard JSON (for machine-readability)
+        json_file = out_dir / "viewer_index.json"
+        with open(json_file, 'w', encoding='utf-8') as f:
             f.write(index.to_json())
-        logger.info(f"Wrote viewer index to {output_file}")
+        logger.info(f"Wrote viewer index to {json_file}")
+        
+        # 2. Write JS Global (for file:// protocol support)
+        # GOVERNANCE: viewer.html expects this exact filename
+        js_file = out_dir / "viewer_index.js"
+        with open(js_file, 'w', encoding='utf-8') as f:
+            f.write(index.to_js())
+        logger.info(f"Wrote viewer index JS to {js_file}")
     
     return index
 
@@ -319,6 +338,10 @@ def validate_viewer_index(index: ViewerIndex) -> List[str]:
             
             if not inst.file_path:
                 errors.append(f"{inst_prefix}: Missing file_path")
+            
+            # GOVERNANCE: Absolute paths break relocatability
+            if inst.file_path.startswith("/") or inst.file_path.startswith("\\") or (len(inst.file_path) > 1 and inst.file_path[1] == ":"):
+                 errors.append(f"{inst_prefix}: Absolute path disallowed: {inst.file_path}")
             if not inst.sop_instance_uid:
                 errors.append(f"{inst_prefix}: Missing sop_instance_uid")
             if inst.display_index < 1:

@@ -69,12 +69,16 @@ class ViewerInstance:
     
     Presentation-only wrapper. The underlying file and all
     processing metadata remain unchanged.
+    
+    Note: temp_path points to run-scoped viewer_cache (Phase 12),
+    NOT to ephemeral /tmp files. This ensures paths survive the
+    entire review session.
     """
     
     # Pointer to source (read-only)
     file_index: int        # Index into preview_files list
     filename: str
-    temp_path: str         # Path to temp file for display
+    temp_path: str         # Run-scoped path in viewer_cache/ (survives session)
     
     # DICOM identifiers (read-only)
     sop_instance_uid: str

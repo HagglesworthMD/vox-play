@@ -43,6 +43,7 @@ class RunPaths:
     logs_dir: Path
     receipts_dir: Path
     tmp_dir: Path
+    viewer_cache: Path  # Phase 12: Run-scoped storage for viewer input files
 
 
 def build_run_paths(output_root: Path, run_id: str) -> RunPaths:
@@ -55,6 +56,7 @@ def build_run_paths(output_root: Path, run_id: str) -> RunPaths:
             logs/
             receipts/
             tmp/
+            viewer_cache/
     
     Args:
         output_root: Base output directory
@@ -71,6 +73,7 @@ def build_run_paths(output_root: Path, run_id: str) -> RunPaths:
         logs_dir=run_root / "logs",
         receipts_dir=run_root / "receipts",
         tmp_dir=run_root / "tmp",
+        viewer_cache=run_root / "viewer_cache",
     )
 
 
@@ -91,3 +94,4 @@ def ensure_run_dirs(run_paths: RunPaths) -> None:
     run_paths.logs_dir.mkdir(exist_ok=True)
     run_paths.receipts_dir.mkdir(exist_ok=True)
     run_paths.tmp_dir.mkdir(exist_ok=True)
+    run_paths.viewer_cache.mkdir(exist_ok=True)

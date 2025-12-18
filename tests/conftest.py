@@ -7,9 +7,96 @@ import zipfile
 
 import pytest
 import pydicom
-from pydicom.dataset import Dataset, FileDataset
+from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian
 import numpy as np
+
+
+def write_minimal_dicom(path: str, modality: str = "US") -> str:
+    """
+    Write a minimal valid DICOM file for test harness realism.
+    
+    This creates the smallest possible valid DICOM (1x1 pixel, 8-bit) that
+    can be successfully rendered by the viewer. Used to ensure temp_path
+    references in tests point to actual readable DICOM bytes on disk.
+    
+    GOVERNANCE NOTE:
+    - Deterministic behavior
+    - No clinical data
+    - No PACS write-back
+    - Audit defensible
+    
+    Args:
+        path: File path to write the DICOM to
+        modality: DICOM modality string (default: US)
+        
+    Returns:
+        str: The path that was written to (same as input)
+    """
+    # Create file meta dataset first
+    meta = FileMetaDataset()
+    meta.MediaStorageSOPClassUID = pydicom.uid.SecondaryCaptureImageStorage
+    meta.MediaStorageSOPInstanceUID = pydicom.uid.generate_uid()
+    meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    
+    # Use FileDataset with preamble for proper DICOM file format
+    ds = FileDataset(
+        path,
+        {},
+        file_meta=meta,
+        preamble=b"\x00" * 128  # 128 null bytes + DICM prefix (automatic)
+    )
+    
+    # Add required patient/study/series metadata
+    ds.PatientName = "Test^Synthetic"
+    ds.PatientID = "TEST_HARNESS"
+    ds.SOPClassUID = meta.MediaStorageSOPClassUID
+    ds.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
+    ds.StudyInstanceUID = pydicom.uid.generate_uid()
+    ds.SeriesInstanceUID = pydicom.uid.generate_uid()
+    ds.Modality = modality
+    
+    # Add minimal image metadata (1x1 pixel, 8-bit grayscale)
+    ds.Rows = 1
+    ds.Columns = 1
+    ds.PhotometricInterpretation = "MONOCHROME2"
+    ds.SamplesPerPixel = 1
+    ds.BitsAllocated = 8
+    ds.BitsStored = 8
+    ds.HighBit = 7
+    ds.PixelRepresentation = 0
+    ds.PixelData = b"\x00"
+    
+    ds.save_as(path, enforce_file_format=True)
+    return path
+
+
+def create_temp_dicom(tmp_path_factory=None, suffix: str = ".dcm", 
+                      modality: str = "US") -> str:
+    """
+    Create a temporary DICOM file and return its path.
+    
+    This wraps write_minimal_dicom with temp file creation, useful for
+    tests that need real on-disk DICOM files for viewer rendering.
+    
+    Args:
+        tmp_path_factory: pytest tmp_path_factory if available, else uses tempfile
+        suffix: File suffix (default: .dcm)
+        modality: DICOM modality string
+        
+    Returns:
+        str: Path to the created temporary DICOM file
+    """
+    import tempfile as tf
+    
+    if tmp_path_factory is not None:
+        tmp_dir = tmp_path_factory.mktemp("dicom")
+        path = str(tmp_dir / f"test{suffix}")
+    else:
+        fd, path = tf.mkstemp(suffix=suffix)
+        os.close(fd)
+    
+    return write_minimal_dicom(path, modality=modality)
 
 
 def create_dummy_dicom(filepath: str, patient_name: str = "Test^Patient", 
@@ -72,7 +159,7 @@ def create_dummy_dicom(filepath: str, patient_name: str = "Test^Patient",
     ds.PixelData = pixel_array.tobytes()
     
     # Save the DICOM file
-    ds.save_as(filepath, write_like_original=False)
+    ds.save_as(filepath, enforce_file_format=True)
     
     return filepath
 

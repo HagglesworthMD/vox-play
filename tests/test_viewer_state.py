@@ -6,15 +6,25 @@ Tests ordering logic and manifest consumption for viewer.
 
 GOVERNANCE: These tests verify presentation-only behavior.
 Export ordering is tested separately in test_gate1_*.py
+
+TEST REALISM NOTE:
+------------------
+Viewer pixel rendering requires valid DICOM bytes on disk.
+Tests that exercise pixel rendering use synthetic single-pixel
+DICOM files created by write_minimal_dicom() from conftest.py.
+This maintains determinism while enabling realistic integration tests.
 """
 
 import pytest
+import tempfile
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from conftest import write_minimal_dicom
 
 from viewer_state import (
     ViewerInstance,
@@ -48,7 +58,7 @@ def make_mock_file(name: str) -> MockFileBuffer:
     return MockFileBuffer(name=name)
 
 
-def make_file_info_cache(entries: list) -> dict:
+def make_file_info_cache(entries: list, write_real_files: bool = False) -> dict:
     """
     Create file_info_cache from list of entry dicts.
     
@@ -60,20 +70,57 @@ def make_file_info_cache(entries: list) -> dict:
         'modality': str,
         ...
     }
+    
+    Args:
+        entries: List of entry dicts with DICOM metadata
+        write_real_files: If True, writes actual minimal DICOM files to
+                         temp_path locations for pixel rendering tests.
+                         This ensures viewer can load and render the files.
+                         
+    Returns:
+        dict: file_info_cache keyed by filename
+        
+    GOVERNANCE NOTE: When write_real_files=True, creates synthetic
+    single-pixel DICOM files. No clinical data. Deterministic behavior.
     """
     cache = {}
+    temp_files = []  # Track for potential cleanup
+    
     for entry in entries:
         filename = entry.get('filename', f"file_{len(cache)}.dcm")
+        modality = entry.get('modality', 'US')
+        
+        # Determine temp_path
+        if 'temp_path' in entry:
+            temp_path = entry['temp_path']
+        elif write_real_files:
+            # Create a real temp file
+            fd, temp_path = tempfile.mkstemp(suffix='.dcm', prefix=f'{filename}_')
+            os.close(fd)
+            temp_files.append(temp_path)
+        else:
+            temp_path = f'/tmp/{filename}'
+        
+        # Write real DICOM if requested
+        # Note: we only write for files we created (tracked in temp_files),
+        # not for user-provided temp_paths which may already have content
+        if write_real_files and temp_path in temp_files:
+            write_minimal_dicom(temp_path, modality=modality)
+        
         cache[filename] = {
             'sop_instance_uid': entry.get('sop_instance_uid', 'UNKNOWN'),
             'series_instance_uid': entry.get('series_instance_uid', 'UNKNOWN'),
             'instance_number': entry.get('instance_number'),
             'acquisition_time': entry.get('acquisition_time'),
-            'modality': entry.get('modality', 'US'),
+            'modality': modality,
             'series_desc': entry.get('series_desc', 'Test Series'),
             'series_number': entry.get('series_number'),
-            'temp_path': entry.get('temp_path', f'/tmp/{filename}'),
+            'temp_path': temp_path,
         }
+    
+    # Store temp_files list for cleanup if needed
+    cache['_temp_files'] = temp_files
+    
     return cache
 
 
@@ -595,3 +642,89 @@ class TestProvenanceLabels:
         icon, desc = get_series_ordering_label(SeriesOrderingMethod.BASELINE_MANIFEST)
         assert icon == '✅'
         assert 'manifest' in desc.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST: REAL FILE WRITING (TEST HARNESS REALISM)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRealFileWriting:
+    """
+    Test that write_real_files=True creates actual DICOM files on disk.
+    
+    This validates the fix for the test harness realism issue where the
+    viewer would fail with Errno 2 (No such file) when trying to render
+    pixels from mock temp_path entries.
+    
+    GOVERNANCE NOTE:
+    These tests use synthetic single-pixel DICOM files that contain
+    no clinical data and are deterministically generated.
+    """
+    
+    def test_write_real_files_creates_valid_dicom(self):
+        """write_real_files=True should create loadable DICOM files."""
+        import pydicom
+        
+        entries = [
+            {'filename': 'test1.dcm', 'sop_instance_uid': 'SOP_1',
+             'series_instance_uid': 'SERIES_1', 'instance_number': 1,
+             'modality': 'US'},
+        ]
+        
+        cache = make_file_info_cache(entries, write_real_files=True)
+        
+        try:
+            # Verify file exists and is readable
+            temp_path = cache['test1.dcm']['temp_path']
+            assert os.path.exists(temp_path), f"File should exist at {temp_path}"
+            
+            # Verify it's a valid DICOM
+            ds = pydicom.dcmread(temp_path)
+            assert hasattr(ds, 'PixelData'), "DICOM should have PixelData"
+            assert ds.Rows == 1, "Should be minimal 1x1 image"
+            assert ds.Columns == 1, "Should be minimal 1x1 image"
+            assert ds.Modality == 'US', "Should preserve modality"
+        finally:
+            # Cleanup
+            for f in cache.get('_temp_files', []):
+                if os.path.exists(f):
+                    os.unlink(f)
+    
+    def test_write_real_files_tracks_for_cleanup(self):
+        """write_real_files=True should track files in _temp_files."""
+        entries = [
+            {'filename': 'a.dcm', 'sop_instance_uid': 'A',
+             'series_instance_uid': 'S1', 'instance_number': 1},
+            {'filename': 'b.dcm', 'sop_instance_uid': 'B',
+             'series_instance_uid': 'S1', 'instance_number': 2},
+        ]
+        
+        cache = make_file_info_cache(entries, write_real_files=True)
+        
+        try:
+            # Should have tracked both files
+            assert len(cache['_temp_files']) == 2
+            
+            # Both should exist
+            for path in cache['_temp_files']:
+                assert os.path.exists(path)
+        finally:
+            # Cleanup
+            for f in cache.get('_temp_files', []):
+                if os.path.exists(f):
+                    os.unlink(f)
+    
+    def test_write_real_files_false_uses_fake_paths(self):
+        """write_real_files=False should use fake /tmp paths."""
+        entries = [
+            {'filename': 'test.dcm', 'sop_instance_uid': 'SOP',
+             'series_instance_uid': 'SERIES', 'instance_number': 1},
+        ]
+        
+        cache = make_file_info_cache(entries, write_real_files=False)
+        
+        # Should use fake path (not a real temp file)
+        temp_path = cache['test.dcm']['temp_path']
+        assert temp_path == '/tmp/test.dcm'
+        assert cache['_temp_files'] == []  # No files tracked
+

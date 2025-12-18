@@ -63,6 +63,8 @@ class TestBuildRunPaths:
         assert paths.logs_dir == paths.root / "logs"
         assert paths.receipts_dir == paths.root / "receipts"
         assert paths.tmp_dir == paths.root / "tmp"
+        # Phase 12: viewer_cache for run-scoped viewer input files
+        assert paths.viewer_cache == paths.root / "viewer_cache"
     
     def test_paths_are_immutable(self):
         """RunPaths should be frozen (immutable)."""
@@ -98,6 +100,8 @@ class TestEnsureRunDirs:
             assert paths.logs_dir.is_dir()
             assert paths.receipts_dir.is_dir()
             assert paths.tmp_dir.is_dir()
+            # Phase 12: viewer_cache for run-scoped viewer input files
+            assert paths.viewer_cache.is_dir()
     
     def test_idempotent(self):
         """ensure_run_dirs should be safe to call multiple times."""

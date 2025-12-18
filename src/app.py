@@ -156,6 +156,85 @@ from run_status import update_run_status  # Phase 8: Fail-safe completion
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 12: RUN-SCOPED VIEWER CACHE
+# 
+# Ensures viewer file paths survive the entire review session.
+# Uses content-hash filenames for deterministic file mapping.
+# Files are written to runs/<run_id>/viewer_cache/ instead of /tmp/.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _ensure_early_run_context() -> 'RunPaths':
+    """
+    Ensure run context exists early (at file upload time).
+    
+    Creates run_id and run_paths if not already present in session state.
+    This is called before file scanning to ensure viewer_cache is available.
+    
+    Returns:
+        RunPaths object for the current session
+    """
+    from pathlib import Path
+    
+    if st.session_state.get('run_paths') is None:
+        # Generate new run ID
+        run_id = generate_run_id()
+        st.session_state.run_id = run_id
+        
+        # Build paths - use downloads directory as output root
+        output_root = Path(os.path.join(BASE_DIR, "downloads"))
+        run_paths = build_run_paths(output_root, run_id)
+        
+        # Create all directories including viewer_cache
+        ensure_run_dirs(run_paths)
+        
+        st.session_state.run_paths = run_paths
+        print(f"[Phase12] Early run context created: {run_paths.run_id}")
+    
+    return st.session_state.run_paths
+
+
+def _get_viewer_cache_path(file_buffer, run_paths: 'RunPaths') -> str:
+    """
+    Get a deterministic, run-scoped path for caching a viewer input file.
+    
+    Uses content hash to generate stable filenames that can be reliably
+    referenced throughout the review session.
+    
+    Args:
+        file_buffer: File buffer with name and getbuffer() method
+        run_paths: RunPaths for the current session
+        
+    Returns:
+        Absolute path to the cached file in viewer_cache/
+    """
+    import hashlib
+    
+    # Get file content
+    content = file_buffer.getbuffer()
+    
+    # Generate content hash for deterministic filename
+    content_hash = hashlib.sha256(content).hexdigest()[:16]
+    
+    # Use original filename + hash for human-readable + unique naming
+    # Sanitize filename to be filesystem-safe
+    safe_name = "".join(c if c.isalnum() or c in '._-' else '_' for c in file_buffer.name)
+    cached_filename = f"{content_hash}_{safe_name}"
+    
+    # Ensure .dcm extension
+    if not cached_filename.lower().endswith('.dcm'):
+        cached_filename += '.dcm'
+    
+    cache_path = run_paths.viewer_cache / cached_filename
+    
+    # Write file if not already cached
+    if not cache_path.exists():
+        cache_path.write_bytes(bytes(content))
+    
+    return str(cache_path)
+
+
+
 def analyze_dicom_context(file_path):
     """
     Analyze a DICOM file to determine its type and risk level for processing.
@@ -1855,6 +1934,11 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
             for key in ['batch_mask', 'batch_canvas_version', 'single_file_mask', 'single_canvas_version']:
                 if key in st.session_state:
                     del st.session_state[key]
+            # Phase 12: Clear run context for new session (new run == new state)
+            for key in ['run_id', 'run_paths', 'phi_review_session', 'manifest_selections', 'manifest_data_cache', 
+                        'manifest_file_hash', 'uploaded_dicom_files', 'file_info_cache']:
+                if key in st.session_state:
+                    del st.session_state[key]
             st.rerun()
     
     # CRITICAL: Stop execution here to prevent re-running processing logic
@@ -2095,8 +2179,15 @@ if 'uploaded_dicom_files' in st.session_state:
     old_names = set(fb.name for fb in st.session_state.uploaded_dicom_files)
     new_names = set(fb.name for fb in dicom_files)
     if old_names != new_names and dicom_files:
-        # New files uploaded - clear old selections
+        # New files uploaded - clear old selections and run context
         st.session_state.manifest_selections = {}
+        # Phase 12: Reset run context for new upload (new files == new session)
+        if 'run_paths' in st.session_state:
+            del st.session_state['run_paths']
+        if 'run_id' in st.session_state:
+            del st.session_state['run_id']
+        if 'phi_review_session' in st.session_state:
+            del st.session_state['phi_review_session']
         
 st.session_state.uploaded_dicom_files = dicom_files
 
@@ -2347,11 +2438,16 @@ if st.session_state.get('uploaded_dicom_files'):
         preview_files.extend(bucket_docs.copy() if bucket_docs else [])
     
     # Pre-analyze all preview files for display
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 12: Run-scoped viewer cache
+    # Files are written to viewer_cache/ instead of /tmp/ to survive the session.
+    # ═══════════════════════════════════════════════════════════════════════════════
+    run_paths = _ensure_early_run_context()
+    
     file_info_cache = {}
     for f in preview_files:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.dcm') as tmp:
-            tmp.write(f.getbuffer())
-            temp_path = tmp.name
+        # Use run-scoped viewer cache instead of ephemeral /tmp
+        temp_path = _get_viewer_cache_path(f, run_paths)
         try:
             ds = pydicom.dcmread(temp_path, force=True)
             modality = str(getattr(ds, 'Modality', 'UNK')).upper()

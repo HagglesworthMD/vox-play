@@ -2259,7 +2259,7 @@ else:
             "internal_repair": "🔧 Internal Repair - Metadata correction (evaluation only)",
             "us_research_safe_harbor": "🇺🇸 US Research (Safe Harbor) - De-identification for research",
             "au_strict_oaic": "🇦🇺 AU Strict (OAIC APP11) - Hash IDs, shift dates",
-            "foi_legal": "⚖️ FOI/Legal - Staff redacted, patient data preserved",
+            "foi_legal": "⚖️ FOI/Legal - Staff identifiers REDACTED, patient identifiers VISIBLE",
             "foi_patient": "📋 FOI/Patient - Patient record release"
         }.get(x, x),
         index=list(["internal_repair", "us_research_safe_harbor", "au_strict_oaic", "foi_legal", "foi_patient"]).index(st.session_state.gateway_profile),
@@ -2284,7 +2284,7 @@ else:
         "internal_repair": ("✅", "success", "**Internal Repair**: Metadata correction. Dates/UIDs preserved. For evaluation."),
         "us_research_safe_harbor": ("🛡️", "info", "**Safe Harbor**: De-identification based on configured rules. For research workflows."),
         "au_strict_oaic": ("🔒", "warning", "**AU Strict**: Hashes PatientID, shifts dates. Based on OAIC APP11 policy intent."),
-        "foi_legal": ("⚖️", "info", "**FOI/Legal**: Preserves patient data, redacts staff names. For disclosure workflows."),
+        "foi_legal": ("⚖️", "info", "**FOI/Legal**: Patient identifiers VISIBLE. Staff identifiers REDACTED. For disclosure workflows."),
         "foi_patient": ("📋", "info", "**FOI/Patient**: Patient record release. For review and evaluation purposes.")
     }
     
@@ -3810,7 +3810,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 # HIDE: Patient Name/Sex/DOB inputs entirely
                 # ═══════════════════════════════════════════════════════════════
                 elif pacs_operation_mode.startswith("foi_"):
-                    st.info("ℹ️ **FOI Mode**: Patient data will be PRESERVED. Staff names will be REDACTED.")
+                    st.info("ℹ️ **FOI Mode**: Patient identifiers VISIBLE. Staff identifiers REDACTED.")
                     
                     # FOI Cover Letter Details
                     col1, col2 = st.columns(2)

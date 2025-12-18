@@ -220,3 +220,9 @@ These are out of scope for Phase 10.
 ## Version
 
 This simulation reflects `v0.9.0-phase9-operator-pack`.
+
+---
+
+## Related Documents
+
+A formal governance-oriented rendering of this simulation is available in [`PHASE10_HANDOFF_SIMULATION_FORMAL.md`](./PHASE10_HANDOFF_SIMULATION_FORMAL.md).

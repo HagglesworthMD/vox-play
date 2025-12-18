@@ -217,35 +217,64 @@ class TestGenerateAuditReceipt:
         assert uuid_str in result
     
     def test_includes_operator_id(self, basic_original_meta, basic_new_meta):
-        """Receipt should include the operator ID."""
+        """Receipt should include the operator ID when profile allows staff visibility.
+        
+        Phase 12: Staff IDs are only shown for internal_repair profile.
+        Other profiles (safe_harbor, research, FOI) redact staff identifiers.
+        """
+        result = generate_audit_receipt(
+            original_meta=basic_original_meta,
+            new_meta=basic_new_meta,
+            uuid_str="uuid",
+            operator_id="OPERATOR_JANE",
+            mode="CLINICAL",
+            compliance_profile="internal_repair",  # Only profile that shows staff IDs
+        )
+        assert "OPERATOR_JANE" in result
+    
+    def test_operator_id_redacted_for_research(self, basic_original_meta, basic_new_meta):
+        """Receipt should REDACT operator ID for research/safe_harbor profiles.
+        
+        Phase 12: Staff identifiers are protected for all profiles except internal_repair.
+        """
         result = generate_audit_receipt(
             original_meta=basic_original_meta,
             new_meta=basic_new_meta,
             uuid_str="uuid",
             operator_id="OPERATOR_JANE",
             mode="RESEARCH",
+            compliance_profile="safe_harbor",
         )
-        assert "OPERATOR_JANE" in result
+        assert "OPERATOR_JANE" not in result
+        assert "REDACTED" in result
     
     def test_includes_original_patient_info(self, basic_original_meta, basic_new_meta):
-        """Receipt should include original patient information."""
+        """Receipt should include original patient information when profile allows PHI.
+        
+        Phase 12: Patient identifiers only shown for internal_repair and FOI profiles.
+        """
         result = generate_audit_receipt(
             original_meta=basic_original_meta,
             new_meta=basic_new_meta,
             uuid_str="uuid",
             operator_id="OP",
-            mode="RESEARCH",
+            mode="CLINICAL",
+            compliance_profile="internal_repair",
         )
         assert "DOE^JOHN" in result or "12345" in result
     
     def test_includes_new_patient_info(self, basic_original_meta, basic_new_meta):
-        """Receipt should include new patient information."""
+        """Receipt should include new patient information when profile allows PHI.
+        
+        Phase 12: Patient identifiers only shown for internal_repair and FOI profiles.
+        """
         result = generate_audit_receipt(
             original_meta=basic_original_meta,
             new_meta=basic_new_meta,
             uuid_str="uuid",
             operator_id="OP",
-            mode="RESEARCH",
+            mode="CLINICAL",
+            compliance_profile="internal_repair",
         )
         assert "ANON^PATIENT" in result or "SUB001" in result
     

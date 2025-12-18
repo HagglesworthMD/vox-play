@@ -446,8 +446,6 @@ body {
     font-size: 10px;
     color: var(--text-muted);
     margin-bottom: 2px;
-    display: none;
-    /* Hide verbose text to save space */
 }
 
 .footer-generated {
@@ -461,8 +459,28 @@ body {
     color: var(--text-muted);
     font-style: italic;
     margin-bottom: 2px;
-    display: none;
-    /* Hide to save space */
+}
+
+.footer-note {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+
+.footer-details {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.footer-details summary {
+    cursor: pointer;
+    color: var(--accent-blue);
+    font-size: 10px;
+}
+
+.footer-details summary:hover {
+    text-decoration: underline;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

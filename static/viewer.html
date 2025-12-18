@@ -97,18 +97,23 @@
             <p class="footer-disclaimer">
                 <strong>Presentation only — view-only navigation.</strong>
                 This viewer provides convenient browsing of images in this export.
-                It does not represent DICOM series structure or modify any exported data.
-            </p>
-            <p class="footer-order-source">
-                Display order matches the export manifest, not necessarily source system order.
-                For authoritative data, refer to the exported DICOM files directly.
-            </p>
-            <p class="footer-multiframe-note">
-                Multi-frame instances display a representative frame only.
             </p>
             <p class="footer-generated" id="footer-generated">
                 <!-- JS populates: "Generated: 2025-12-17 | Ordering source: export_order_manifest" -->
             </p>
+            <details class="footer-details">
+                <summary>More info</summary>
+                <p class="footer-order-source">
+                    Display order matches the export manifest, not necessarily source system order.
+                    For authoritative data, refer to the exported DICOM files directly.
+                </p>
+                <p class="footer-multiframe-note">
+                    Multi-frame instances display a representative frame only.
+                </p>
+                <p class="footer-note">
+                    It does not represent DICOM series structure or modify any exported data.
+                </p>
+            </details>
         </div>
     </footer>
 

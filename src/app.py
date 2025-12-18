@@ -166,6 +166,30 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Files are written to runs/<run_id>/viewer_cache/ instead of /tmp/.
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _version_viewer_html(html_content: str, version_stamp: str) -> str:
+    """
+    Inject cache-busting version query strings into viewer.html asset references.
+    
+    Phase 12: Prevents browser caching issues when viewer assets are updated.
+    Each run gets a unique version stamp so changes are picked up immediately.
+    
+    Args:
+        html_content: Original viewer.html content
+        version_stamp: Version string (e.g. Unix timestamp or run_id)
+        
+    Returns:
+        HTML with versioned asset URLs: viewer.css?v=<stamp>
+    """
+    import re
+    
+    # Assets to version (CSS and JS files)
+    versioned = html_content
+    versioned = re.sub(r'href="viewer\.css"', f'href="viewer.css?v={version_stamp}"', versioned)
+    versioned = re.sub(r'src="viewer\.js"', f'src="viewer.js?v={version_stamp}"', versioned)
+    versioned = re.sub(r'src="viewer_index\.js"', f'src="viewer_index.js?v={version_stamp}"', versioned)
+    
+    return versioned
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 12: LOCAL VIEWER SERVER
 # 
@@ -5040,11 +5064,23 @@ Studies in this archive:
                                         run_viewer_dir = run_paths.viewer_dir
                                         run_viewer_dir.mkdir(parents=True, exist_ok=True)  # Defensive
                                         
-                                        # Copy viewer assets
+                                        # Copy viewer assets with versioning
+                                        # Phase 12: Use run_id as version stamp for cache-busting
+                                        version_stamp = run_paths.run_id
+                                        
                                         for asset_name in required_assets:
                                             asset_path = os.path.join(static_dir, asset_name)
                                             dst_path = run_viewer_dir / asset_name
-                                            shutil.copy2(asset_path, dst_path)
+                                            
+                                            if asset_name == 'viewer.html':
+                                                # Version the HTML file to bust browser cache
+                                                with open(asset_path, 'r', encoding='utf-8') as f:
+                                                    html_content = f.read()
+                                                versioned_html = _version_viewer_html(html_content, version_stamp)
+                                                dst_path.write_text(versioned_html, encoding='utf-8')
+                                            else:
+                                                # Copy other assets as-is
+                                                shutil.copy2(asset_path, dst_path)
                                         
                                         # Write viewer_index.json
                                         (run_viewer_dir / "viewer_index.json").write_text(index_json, encoding='utf-8')

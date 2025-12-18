@@ -97,6 +97,23 @@ class ViewerInstance:
     
     # Display position (1-indexed for UI, set after sorting)
     stack_position: int = 0
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 12: Non-image modality detection for placeholder handling
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Modalities that contain displayable pixel data
+    IMAGE_MODALITIES = {'US', 'CT', 'MR', 'DX', 'CR', 'MG', 'XA', 'RF', 'NM', 'PT'}
+    
+    @property
+    def is_image_modality(self) -> bool:
+        """
+        Check if this instance contains displayable pixel data.
+        
+        Non-image modalities (OT, SC, SR, DOC, etc.) require placeholder
+        handling instead of pixel rendering.
+        """
+        return self.modality.upper() in self.IMAGE_MODALITIES
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

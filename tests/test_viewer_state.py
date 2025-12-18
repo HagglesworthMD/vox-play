@@ -431,6 +431,63 @@ class TestViewerSeriesProperties:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TEST: VIEWER INSTANCE PROPERTIES (Phase 12)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestViewerInstanceProperties:
+    """Test ViewerInstance computed properties including is_image_modality."""
+    
+    def make_instance(self, modality: str) -> ViewerInstance:
+        """Create a test instance with specified modality."""
+        return ViewerInstance(
+            file_index=0,
+            filename='test.dcm',
+            temp_path='/tmp/test.dcm',
+            sop_instance_uid='TEST_SOP',
+            series_instance_uid='TEST_SERIES',
+            instance_number=1,
+            acquisition_time=None,
+            modality=modality,
+            series_description='Test',
+        )
+    
+    def test_is_image_modality_true_for_imaging(self):
+        """is_image_modality should return True for imaging modalities."""
+        imaging_modalities = ['US', 'CT', 'MR', 'DX', 'CR', 'MG', 'XA', 'RF', 'NM', 'PT']
+        
+        for mod in imaging_modalities:
+            instance = self.make_instance(mod)
+            assert instance.is_image_modality is True, f"{mod} should be image modality"
+    
+    def test_is_image_modality_false_for_documents(self):
+        """is_image_modality should return False for non-image modalities (OT/SC/SR/DOC)."""
+        doc_modalities = ['SC', 'OT', 'DOC', 'SR', 'PR', 'KO']
+        
+        for mod in doc_modalities:
+            instance = self.make_instance(mod)
+            assert instance.is_image_modality is False, f"{mod} should not be image modality"
+    
+    def test_is_image_modality_case_insensitive(self):
+        """is_image_modality should be case insensitive."""
+        # Lowercase
+        instance_lower = self.make_instance('us')
+        assert instance_lower.is_image_modality is True
+        
+        # Mixed case
+        instance_mixed = self.make_instance('Us')
+        assert instance_mixed.is_image_modality is True
+        
+        # Uppercase
+        instance_upper = self.make_instance('US')
+        assert instance_upper.is_image_modality is True
+    
+    def test_unknown_modality_is_not_image(self):
+        """Unknown modalities should not be considered image (conservative)."""
+        instance = self.make_instance('UNKNOWN_MOD')
+        assert instance.is_image_modality is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # TEST: VIEWER STUDY STATE NAVIGATION
 # ═══════════════════════════════════════════════════════════════════════════════
 

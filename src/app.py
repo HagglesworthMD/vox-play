@@ -1518,8 +1518,10 @@ def display_preview(dcm_path: str, caption: str):
         
         # Check if this DICOM file has pixel data (images) or is metadata-only
         if not hasattr(ds, 'PixelData') or ds.PixelData is None:
-            st.info("📄 **Preview Unavailable**: This file contains patient data but no displayable image (e.g., Structured Report or Metadata).")
-            st.caption("You can still edit patient details and process the file - pixel masking is not applicable.")
+            # Phase 12: Neutral placeholder for non-image objects
+            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
+            st.info(f"📄 Non-image object ({modality}). Preview is not available.")
+            st.caption("This item will remain in the evidence bundle and export outputs according to policy.")
             return
         
         arr = ds.pixel_array
@@ -1551,8 +1553,10 @@ def display_preview_with_mask(dcm_path: str, mask_coords: tuple, caption: str):
         
         # Check if this DICOM file has pixel data (images) or is metadata-only
         if not hasattr(ds, 'PixelData') or ds.PixelData is None:
-            st.info("📄 **Preview Unavailable**: This file contains patient data but no displayable image (e.g., Structured Report or Metadata).")
-            st.caption("You can still edit patient details and process the file - pixel masking is not applicable.")
+            # Phase 12: Neutral placeholder for non-image objects
+            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
+            st.info(f"📄 Non-image object ({modality}). Preview is not available.")
+            st.caption("This item will remain in the evidence bundle and export outputs according to policy.")
             return
         
         arr = ds.pixel_array
@@ -3015,15 +3019,41 @@ if st.session_state.get('uploaded_dicom_files'):
                             viewer_state.next_instance()
                             st.rerun()
                     
-                    # Display image
-                    try:
-                        pil_img, w, h = dicom_to_pil(instance.temp_path)
-                        st.image(pil_img, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Cannot display image: {e}")
+                    # ═══════════════════════════════════════════════════════════════
+                    # PHASE 12: OT/SC Non-Image Placeholder Handling
+                    # Non-image modalities get neutral placeholder, not error banners.
+                    # Image modalities that fail to decode ARE errors (real fault).
+                    # ═══════════════════════════════════════════════════════════════
                     
-                    # Metadata footer
-                    st.caption(f"Modality: {instance.modality} | Instance#: {instance.instance_number or '—'} | Position: {instance.stack_position}/{total}")
+                    if instance.is_image_modality:
+                        # Image modality - attempt pixel rendering
+                        try:
+                            pil_img, w, h = dicom_to_pil(instance.temp_path)
+                            st.image(pil_img, use_container_width=True)
+                        except Exception as e:
+                            # Real error - image modality should have displayable pixels
+                            st.error(f"Cannot display image: {e}")
+                    else:
+                        # Non-image modality (OT, SC, SR, DOC, etc.) - neutral placeholder
+                        st.markdown("""
+                        <div style="background: rgba(139, 148, 158, 0.08); 
+                                    border: 1px solid rgba(139, 148, 158, 0.25); 
+                                    border-radius: 12px; 
+                                    padding: 40px 30px; 
+                                    text-align: center;
+                                    margin: 20px 0;">
+                            <div style="font-size: 48px; margin-bottom: 16px;">📄</div>
+                            <div style="font-size: 16px; font-weight: 500; color: #e6edf3; margin-bottom: 8px;">
+                                Non-image object ({0}). Preview is not available.
+                            </div>
+                            <div style="font-size: 13px; color: #8b949e;">
+                                This item will remain in the evidence bundle and export outputs according to policy.
+                            </div>
+                        </div>
+                        """.format(instance.modality), unsafe_allow_html=True)
+                    
+                    # Metadata footer (shown for all object types)
+                    st.caption(f"Modality: {instance.modality} | SOP: {instance.sop_instance_uid[:16]}… | Instance#: {instance.instance_number or '—'} | Position: {instance.stack_position}/{total}")
                 else:
                     st.info("Select a series to view images.")
             

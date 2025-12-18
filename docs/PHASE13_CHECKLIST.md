@@ -27,11 +27,11 @@ No new viewer buttons, modes, or export types.
 
 **Scope:** user-facing failures only
 
-- [ ] Missing input folder → friendly explanation
-- [ ] No files selected → guidance message
-- [ ] Invalid combinations → disabled button + reason
-- [ ] No stack traces in UI
-- [ ] Errors never look like "something broke internally"
+- [x] Missing input folder → friendly explanation
+- [x] No files selected → guidance message
+- [x] Invalid combinations → disabled button + reason
+- [x] No stack traces in UI (removed all `{e}` from messages)
+- [x] Errors never look like "something broke internally"
 
 **Hard rule:**
 Errors explain *what the user can do next*, not what went wrong technically.

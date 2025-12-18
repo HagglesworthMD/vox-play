@@ -38,6 +38,7 @@ RUN_SCOPED_KEYS = {
     
     # Viewer navigation state
     'viewer_state',  # ViewerStudyState with temp_path references
+    'viewer_needs_rebuild',  # Phase 13.4: Explicit rebuild flag reset
     'selected_series_uid',
     'selected_instance_idx',
     

@@ -150,6 +150,7 @@ from viewer_state import ViewerStudyState, build_viewer_state, ViewerOrderingMet
 from export.viewer_index import generate_viewer_index  # Phase 6: HTML export viewer
 from run_context import generate_run_id, build_run_paths, ensure_run_dirs  # Phase 8: Operational hardening
 from preflight import run_preflight, raise_if_failed, PreflightError  # Phase 8: Startup gate
+from evidence_capture import build_run_receipt, write_run_receipt, assert_phi_sterile  # Phase 8: Evidence capture
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -3703,6 +3704,30 @@ if st.session_state.get('uploaded_dicom_files'):
                     st.error("🚫 Preflight checks failed. See preflight_error.txt in the run logs folder.")
                     print(f"[Phase8] Preflight: FAILED - {preflight_err}")
                     st.stop()
+                
+                # ═══════════════════════════════════════════════════════════════
+                # PHASE 8: Evidence/Config Capture (4.4)
+                # PHI-sterile run receipt; non-fatal warning on failure
+                # ═══════════════════════════════════════════════════════════════
+                try:
+                    receipt = build_run_receipt(
+                        run_id=run_id,
+                        run_root=run_paths.root,
+                        processing_mode=st.session_state.get("processing_mode") or pacs_operation_mode,
+                        gateway_profile=st.session_state.get("gateway_profile") or pacs_operation_mode,
+                        selection_scope=st.session_state.get("selection_scope"),
+                        build_info=_build_stamp(),
+                        git_sha="unknown",  # Could extract from _build_stamp if needed
+                        preflight_result=preflight_result,
+                    )
+                    assert_phi_sterile(receipt)
+                    receipt_path = write_run_receipt(run_paths.receipts_dir, receipt)
+                    print(f"[Phase8] Run receipt written: {receipt_path}")
+                except Exception as receipt_err:
+                    # Non-fatal: receipt failure must not alter processing semantics
+                    warn_path = run_paths.logs_dir / "receipt_warning.txt"
+                    warn_path.write_text(f"Receipt capture warning: {receipt_err.__class__.__name__}: {receipt_err}\n", encoding="utf-8")
+                    print(f"[Phase8] Receipt warning: {receipt_err}")
                 
                 # ═══════════════════════════════════════════════════════════════
                 # DIAGNOSTIC TRACKING - Start timer and byte counter

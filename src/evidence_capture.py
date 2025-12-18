@@ -110,8 +110,11 @@ def build_run_receipt(
         "build_info": build_info,
         "git_sha": git_sha or "unknown",
         "preflight": _preflight_summary(preflight_result),
-        "phase": "phase8",
-        "item": "4.4",
+        # Phase 12: Canonical viewer path for FOI/support defensibility
+        # Path is deterministic from run_id; actual creation happens at export.
+        "viewer_path": f"downloads/voxelmask_runs/{run_id}/viewer/viewer.html",
+        "phase": "phase12",  # Updated from phase8
+        "item": "viewer_consolidation",
     }
 
     # Strip None values for cleanliness.

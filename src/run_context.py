@@ -36,6 +36,8 @@ class RunPaths:
     
     All artefacts for a run should be written under these paths.
     Immutable after creation.
+    
+    Phase 12: viewer_dir is the single canonical location for the HTML export viewer.
     """
     run_id: str
     root: Path
@@ -44,19 +46,21 @@ class RunPaths:
     receipts_dir: Path
     tmp_dir: Path
     viewer_cache: Path  # Phase 12: Run-scoped storage for viewer input files
+    viewer_dir: Path    # Phase 12: Canonical HTML viewer location
 
 
 def build_run_paths(output_root: Path, run_id: str) -> RunPaths:
     """
     Build canonical directory paths for a run.
     
-    Layout:
+    Layout (Phase 12):
         <output_root>/voxelmask_runs/<run_id>/
             bundle/
             logs/
             receipts/
             tmp/
             viewer_cache/
+            viewer/          <- Canonical HTML viewer location
     
     Args:
         output_root: Base output directory
@@ -74,6 +78,7 @@ def build_run_paths(output_root: Path, run_id: str) -> RunPaths:
         receipts_dir=run_root / "receipts",
         tmp_dir=run_root / "tmp",
         viewer_cache=run_root / "viewer_cache",
+        viewer_dir=run_root / "viewer",
     )
 
 
@@ -95,3 +100,4 @@ def ensure_run_dirs(run_paths: RunPaths) -> None:
     run_paths.receipts_dir.mkdir(exist_ok=True)
     run_paths.tmp_dir.mkdir(exist_ok=True)
     run_paths.viewer_cache.mkdir(exist_ok=True)
+    run_paths.viewer_dir.mkdir(exist_ok=True)  # Phase 12: Canonical viewer location

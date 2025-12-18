@@ -166,6 +166,72 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Files are written to runs/<run_id>/viewer_cache/ instead of /tmp/.
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 12: SYSTEM OPENER HELPER
+# 
+# Opens files using the system's default application (xdg-open/open/start).
+# Includes guardrails to reject transient paths like /run/user/... or /tmp.
+# This is the ONLY way the UI should open the viewer.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _open_viewer_with_system(viewer_path: str) -> tuple[bool, str]:
+    """
+    Open the viewer HTML file using the system's default browser/opener.
+    
+    Phase 12 UI Hardening:
+    - Uses xdg-open on Linux, open on macOS, start on Windows
+    - Rejects transient paths (/run/user/..., /tmp, etc.)
+    - Only opens from canonical run folder paths
+    
+    Args:
+        viewer_path: Absolute path to viewer.html
+        
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 12 GUARDRAIL: Reject transient/unstable paths
+    # These paths are session-derived and won't survive app restarts.
+    # ═══════════════════════════════════════════════════════════════════════════
+    BANNED_PATH_PREFIXES = (
+        '/run/user/',      # xdg-document-portal sandbox paths
+        '/tmp/',           # Temporary filesystem
+        '/var/tmp/',       # Another temp location
+        '/private/tmp/',   # macOS temp
+    )
+    
+    normalized_path = str(Path(viewer_path).resolve())
+    for banned in BANNED_PATH_PREFIXES:
+        if normalized_path.startswith(banned):
+            return False, f"Viewer path is transient ({banned}...) and will not survive. Use run-scoped path."
+    
+    # Verify the file exists
+    if not os.path.exists(viewer_path):
+        return False, f"Viewer file not found: {viewer_path}"
+    
+    # Determine system opener command
+    try:
+        if sys.platform == 'linux':
+            subprocess.Popen(['xdg-open', viewer_path], 
+                           stdout=subprocess.DEVNULL, 
+                           stderr=subprocess.DEVNULL)
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', viewer_path],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+        elif sys.platform == 'win32':
+            os.startfile(viewer_path)  # Windows-specific
+        else:
+            return False, f"Unsupported platform: {sys.platform}"
+        
+        return True, f"Opened viewer: {viewer_path}"
+    except Exception as e:
+        return False, f"Failed to open viewer: {e}"
+
 def _ensure_early_run_context() -> 'RunPaths':
     """
     Ensure run context exists early (at file upload time).
@@ -1998,44 +2064,42 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         """, unsafe_allow_html=True)
     
     # ═══════════════════════════════════════════════════════════════════════════════
-    # PHASE 12: RUN-SCOPED VIEWER LINK
-    # Shows a direct link to the viewer in the run directory (not the ZIP).
-    # This survives Streamlit reruns and Steam Deck's xdg-document-portal sandboxing.
+    # PHASE 12: CANONICAL VIEWER (Single Button, System Opener)
+    # 
+    # UI Hardening Requirements:
+    # 1. Only one "Open Viewer" action (no duplicate buttons)
+    # 2. Uses system opener (xdg-open/open/start), NOT browser URLs
+    # 3. Never opens from ZIP or transient paths
+    # 4. Shows canonical path for FOI/support reference
     # ═══════════════════════════════════════════════════════════════════════════════
     run_viewer_path = st.session_state.get('run_scoped_viewer_path')
     if run_viewer_path and os.path.exists(run_viewer_path):
-        # Use file:// protocol for local access
-        from pathlib import Path
-        viewer_file_url = f"file://{Path(run_viewer_path).as_posix()}"
-        
-        st.markdown(f"""
+        # Display viewer panel with system opener button
+        st.markdown("""
         <div style="background: linear-gradient(135deg, rgba(35, 134, 54, 0.15) 0%, rgba(51, 145, 255, 0.1) 100%); 
                     border: 1px solid rgba(35, 134, 54, 0.4); 
                     border-radius: 12px; 
                     padding: 16px 20px; 
                     margin: 12px 0;">
             <div style="font-weight: 600; color: #e6edf3; font-size: 14px; margin-bottom: 8px;">
-                🖼️ Open Viewer (Stable Path)
+                🖼️ Export Viewer
             </div>
-            <div style="color: #8b949e; font-size: 13px; margin-bottom: 12px;">
-                This viewer is saved in your run directory and will work even after reloading.
-            </div>
-            <a href="{viewer_file_url}" target="_blank" 
-               style="display: inline-block; 
-                      background: linear-gradient(135deg, #238636 0%, #2ea043 100%); 
-                      color: white; 
-                      padding: 10px 20px; 
-                      border-radius: 8px; 
-                      text-decoration: none; 
-                      font-weight: 600;
-                      box-shadow: 0 2px 8px rgba(35, 134, 54, 0.3);">
-                🔍 Open Viewer in Browser
-            </a>
-            <div style="color: #6e7681; font-size: 11px; margin-top: 10px;">
-                <code style="background: #21262d; padding: 2px 6px; border-radius: 4px;">{run_viewer_path}</code>
+            <div style="color: #8b949e; font-size: 13px; margin-bottom: 4px;">
+                Opens in your default browser. Works after app restart and across sessions.
             </div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # System opener button - Phase 12 hardened
+        if st.button("🔍 Open Viewer (Run Folder)", key="open_viewer_system", type="secondary", use_container_width=True):
+            success, message = _open_viewer_with_system(run_viewer_path)
+            if success:
+                st.success(f"✅ {message}")
+            else:
+                st.error(f"❌ {message}")
+        
+        # Show canonical path for audit/support reference
+        st.caption(f"📁 Viewer path: `{run_viewer_path}`")
     
     # Always offer audit log download
     audit_filename = f"VoxelMask_AuditLog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -4898,8 +4962,9 @@ Studies in this archive:
                                     # that disappear after extraction.
                                     # ═══════════════════════════════════════════════════════════════
                                     if run_paths:
-                                        run_viewer_dir = run_paths.root / "viewer"
-                                        run_viewer_dir.mkdir(parents=True, exist_ok=True)
+                                        # Phase 12: Use canonical viewer_dir from RunPaths
+                                        run_viewer_dir = run_paths.viewer_dir
+                                        run_viewer_dir.mkdir(parents=True, exist_ok=True)  # Defensive
                                         
                                         # Copy viewer assets
                                         for asset_name in required_assets:

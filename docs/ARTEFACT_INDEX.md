@@ -17,6 +17,7 @@ Start here:
 | Pre-run and post-run checklist | [`docs/phase9_operator_pack/OPERATOR_CHECKLIST.md`](./phase9_operator_pack/OPERATOR_CHECKLIST.md) |
 | Troubleshooting runbook | [`docs/phase9_operator_pack/RUNBOOK_TROUBLESHOOTING.md`](./phase9_operator_pack/RUNBOOK_TROUBLESHOOTING.md) |
 | Scope boundaries | [`docs/phase9_operator_pack/WHAT_THIS_IS_NOT.md`](./phase9_operator_pack/WHAT_THIS_IS_NOT.md) |
+| **Phase 12 UI freeze contract** | [`docs/PHASE12_UI_FREEZE.md`](./PHASE12_UI_FREEZE.md) |
 
 ---
 

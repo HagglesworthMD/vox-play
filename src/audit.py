@@ -138,27 +138,92 @@ def generate_audit_receipt(
             new_meta['new_study_date'] = final_date
     # ----------------------------------------------------------
     
-    # Determine reason code based on mode
-    if is_foi_mode:
-        reason_code = "FOI_LEGAL_RELEASE"
-    elif mode.upper() == "CLINICAL":
-        reason_code = "CLINICAL_CORRECTION"
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 12: TWO-FLAG PHI VISIBILITY MODEL
+    # 
+    # Two distinct visibility classes (not one boolean):
+    #   1. Patient identifiers (PatientName, PatientID, Accession, DOB, etc.)
+    #   2. Staff identifiers (Operator, Sonographer, Radiographer, device IDs, etc.)
+    #
+    # Policy table:
+    #   Profile              | Patient PHI | Staff IDs
+    #   ---------------------|-------------|------------
+    #   research_*           | REDACTED    | REDACTED
+    #   foi_patient          | SHOWN       | REDACTED
+    #   foi_legal            | SHOWN       | REDACTED
+    #   internal_repair      | SHOWN       | SHOWN (internal only)
+    #
+    # This is audit-defensible and explicit.
+    # ═══════════════════════════════════════════════════════════════════════════════
+    
+    # Explicit profile allowlists — profile drives EVERYTHING (not is_foi_mode boolean)
+    PATIENT_PHI_PROFILES = {"internal_repair", "foi_patient", "foi_legal", "foi_legal_chain"}
+    STAFF_ID_PROFILES = {"internal_repair"}  # Only internal repair shows staff
+    FOI_PROFILES = {"foi_patient", "foi_legal", "foi_legal_chain"}  # Derive FOI status from profile
+    RESEARCH_PROFILES = {"us_research_safe_harbor", "au_strict_oaic"}
+    
+    show_patient_phi = compliance_profile in PATIENT_PHI_PROFILES
+    show_staff_ids = compliance_profile in STAFF_ID_PROFILES
+    is_foi_profile = compliance_profile in FOI_PROFILES  # Derived from profile, not boolean param
+    is_research_profile = compliance_profile in RESEARCH_PROFILES
+    
+    # Prepare patient PHI display values
+    if show_patient_phi:
+        display_patient_name = original_meta.get('patient_name', 'N/A')
+        display_patient_id = original_meta.get('patient_id', 'N/A')
+        display_new_patient_name = new_meta.get('patient_name', 'N/A')
+        display_new_patient_id = new_meta.get('patient_id', 'N/A')
     else:
+        display_patient_name = 'REDACTED'
+        display_patient_id = 'REDACTED'
+        display_new_patient_name = 'REDACTED'
+        display_new_patient_id = 'REDACTED'
+    
+    # Prepare staff/infrastructure ID display values
+    # These fields can leak staff identity even indirectly
+    if show_staff_ids:
+        display_operator_id = operator_id
+        display_sonographer = extract_sonographer_initials(original_meta)
+        display_institution = original_meta.get('institution', 'N/A')
+    else:
+        display_operator_id = 'REDACTED'
+        display_sonographer = 'REDACTED'
+        display_institution = 'REDACTED'  # Can identify staff in small teams
+    
+    # Visibility status labels for receipt transparency
+    patient_phi_status = "SHOWN" if show_patient_phi else "REDACTED"
+    staff_id_status = "SHOWN" if show_staff_ids else "REDACTED"
+    
+    # Output DICOM status (what's in the actual file, not just receipt)
+    if is_foi_profile:
+        output_patient_tags = "PRESERVED (Chain of Custody)"
+    elif is_research_profile:
+        output_patient_tags = "ANONYMISED"
+    elif compliance_profile == "internal_repair":
+        output_patient_tags = "CORRECTED (Contains PHI)"
+    else:
+        output_patient_tags = "PROCESSED"
+    
+    # Determine reason code based on PROFILE (not is_foi_mode boolean)
+    if is_foi_profile:
+        reason_code = "FOI_LEGAL_RELEASE"
+    elif compliance_profile == "internal_repair":
+        reason_code = "CLINICAL_CORRECTION"
+    elif is_research_profile:
         reason_code = "RESEARCH_DEID"
+    else:
+        reason_code = "PROCESSING"
     
-    # Determine metadata sanitization details based on mode
-    is_research = mode.upper() == "RESEARCH" or "DE-ID" in mode.upper()
-    is_clinical = mode.upper() == "CLINICAL" or "CORRECTION" in mode.upper()
-    
-    if is_foi_mode:
+    # Determine metadata sanitization details based on PROFILE
+    if is_foi_profile:
         metadata_disposition = "PRESERVED (FOI Legal Release - Staff names redacted)"
         private_tags_status = "REMOVED (Vendor-specific)"
         uids_status = "PRESERVED (Chain of Custody)"
-    elif is_research:
+    elif is_research_profile:
         metadata_disposition = "STRIPPED & ANONYMIZED (Safe for Research)"
         private_tags_status = "REMOVED"
         uids_status = "REMAPPED (Deterministic)"
-    elif is_clinical:
+    elif compliance_profile == "internal_repair":
         metadata_disposition = "RETAINED & CORRECTED (Contains PHI)"
         private_tags_status = "PRESERVED"
         uids_status = "PRESERVED"
@@ -167,24 +232,45 @@ def generate_audit_receipt(
         metadata_disposition = "PROCESSED"
         private_tags_status = "UNKNOWN"
         uids_status = "UNKNOWN"
-
-    # Extract sonographer initials
-    sonographer_initials = extract_sonographer_initials(original_meta)
     
-    # Build professional audit receipt with enhanced layout
-    audit_lines = [
-        "╔═══════════════════════════════════════════════════════════════════════════════╗",
-        "║                    VOXELMASK - AUDIT RECEIPT                     ║",
-        "╚═══════════════════════════════════════════════════════════════════════════════╝",
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # BUILD RECEIPT - FOI gets screaming header to prevent accidental re-use
+    # ═══════════════════════════════════════════════════════════════════════════════
+    if is_foi_profile:
+        # FOI SCREAMING HEADER - unambiguous warning
+        audit_lines = [
+            "╔═══════════════════════════════════════════════════════════════════════════════╗",
+            "║          ⚠️  FOI EXPORT — CONTAINS PATIENT IDENTIFIERS  ⚠️            ║",
+            "║                       STAFF IDENTIFIERS REDACTED                       ║",
+            "╠═══════════════════════════════════════════════════════════════════════════════╣",
+            "║                    VOXELMASK - AUDIT RECEIPT                     ║",
+            "╚═══════════════════════════════════════════════════════════════════════════════╝",
+        ]
+    else:
+        # Standard header
+        audit_lines = [
+            "╔═══════════════════════════════════════════════════════════════════════════════╗",
+            "║                    VOXELMASK - AUDIT RECEIPT                     ║",
+            "╚═══════════════════════════════════════════════════════════════════════════════╝",
+        ]
+    
+    audit_lines.extend([
+        "",
+        "▶ VISIBILITY DISCLOSURE",
+        "─────────────────────────────────────────────────────────────────────────────────",
+        f"Patient identifiers in receipt:  {patient_phi_status}",
+        f"Staff identifiers in receipt:    {staff_id_status}",
+        f"Patient tags in OUTPUT DICOM:    {output_patient_tags}",
+        f"Pixel masking applied:           {'YES' if mask_applied else 'NO'}",
         "",
         "▶ PROCESSING DETAILS",
         "─────────────────────────────────────────────────────────────────────────────────",
         f"Timestamp:     {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC",
         f"Scrub UUID:    {uuid_str}",
-        f"Operator:      {operator_id}",
-        f"Sonographer:   {sonographer_initials}",
+        f"Operator:      {display_operator_id}",
+        f"Sonographer:   {display_sonographer}",
         f"Reason:        {reason_code}",
-        f"Mode:          {mode}",
+        f"Profile:       {compliance_profile}",
         "",
         "▶ CHAIN OF CUSTODY (SHA-256)",
         "─────────────────────────────────────────────────────────────────────────────────",
@@ -194,18 +280,18 @@ def generate_audit_receipt(
         "▶ SUBJECT DATA",
         "─────────────────────────────────────────────────────────────────────────────────",
         f"Filename:       {filename}",
-        f"Patient:        {original_meta.get('patient_name', 'N/A')}",
-        f"Patient ID:     {original_meta.get('patient_id', 'N/A')}",
+        f"Patient:        {display_patient_name}",
+        f"Patient ID:     {display_patient_id}",
         f"Original Date:  {original_meta.get('study_date', 'N/A')}",
         f"New Study Date: {new_meta.get('new_study_date', new_meta.get('study_date', 'N/A'))}",
         f"Study Time:     {original_meta.get('study_time', 'N/A')}",
         f"Modality:       {original_meta.get('modality', 'N/A')}",
-        f"Institution:    {original_meta.get('institution', 'N/A')}",
+        f"Institution:    {display_institution}",
         f"Accession:      {new_meta.get('accession_number', new_meta.get('accession', 'REMOVED'))} (was: {original_meta.get('accession', 'N/A')})",
         "",
         "▶ CLINICAL CONTEXT & SCAN PARAMETERS",
         "─────────────────────────────────────────────────────────────────────────────────",
-    ]
+    ])
     
     # Add clinical context details if available
     clinical_fields = [
@@ -234,8 +320,8 @@ def generate_audit_receipt(
         "▶ TECHNICAL & SAFETY PROTOCOLS",
         "─────────────────────────────────────────────────────────────────────────────────",
         f"Output Filename: {filename.rsplit('.', 1)[0]}_fixed.dcm" if filename else "Output Filename: processed.dcm",
-        f"New Patient:      {new_meta.get('patient_name', 'N/A')}",
-        f"New Patient ID:   {new_meta.get('patient_id', 'N/A')}",
+        f"New Patient:      {display_new_patient_name}",
+        f"New Patient ID:   {display_new_patient_id}",
     ])
     
     # Pixel Action with transparency
@@ -298,11 +384,17 @@ def generate_audit_receipt(
         ])
     elif compliance_profile == "internal_repair":
         # Clinical Correction specific section
+        # Determine if patient name was actually changed
+        original_name = original_meta.get('patient_name', '')
+        new_name = new_meta.get('patient_name', '')
+        name_changed = original_name != new_name and new_name not in ('PRESERVED', 'N/A', '')
+        name_status = "CORRECTED (New value applied)" if name_changed else "PRESERVED (No change)"
+        
         audit_lines.extend([
             "▶ CLINICAL CORRECTION CERTIFICATION",
             "─────────────────────────────────────────────────────────────────────────────────",
             "Processing Type:     Clinical Data Correction (Internal Repair)",
-            "✓ Patient Name:      CORRECTED (New value applied)",
+            f"✓ Patient Name:      {name_status}",
             "✓ Accession Number:  PRESERVED (Workflow Continuity)",
             "✓ Study Date:        PRESERVED (Clinical Reference)",
             "✓ Study/Series UIDs: PRESERVED (PACS Compatibility)",
@@ -311,7 +403,7 @@ def generate_audit_receipt(
             "═══════════════════════════════════════════════════════════════════════════════",
             "This audit log records a clinical data correction for PACS workflow purposes.",
             "Original study identifiers have been PRESERVED for clinical continuity.",
-            "Patient demographics have been CORRECTED as per operator input.",
+            "Patient demographics have been " + ("CORRECTED" if name_changed else "PRESERVED") + " as per operator input.",
             "═══════════════════════════════════════════════════════════════════════════════"
         ])
     else:
@@ -323,7 +415,7 @@ def generate_audit_receipt(
             "✓ OAIC/APP 11: Compliant",
             "✓ PatientIdentityRemoved: YES",
             "✓ BurnedInAnnotation: NO",
-            "✓ Safe for Research Use: " + ("YES" if is_research else "NO - Clinical Only"),
+            "✓ Safe for Research Use: " + ("YES" if is_research_profile else "NO - Clinical Only"),
             "",
             "═══════════════════════════════════════════════════════════════════════════════",
             "This audit log constitutes a legal record of the de-identification process.",

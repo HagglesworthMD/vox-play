@@ -1588,7 +1588,7 @@ def display_preview(dcm_path: str, caption: str):
         # ═══════════════════════════════════════════════════════════════════════
         if not should_render_pixels(ds):
             modality = str(getattr(ds, 'Modality', 'UNK')).upper()
-            st.warning(f"⚠️ {modality} image too large for browser preview (>300MB raw).")
+            st.warning(f"⚠️ {modality} image too large for browser preview (>150MB raw).")
             st.caption("Metadata will be processed normally. Pixel data is preserved in export.")
             return
 
@@ -1627,6 +1627,15 @@ def display_preview_with_mask(dcm_path: str, mask_coords: tuple, caption: str):
             st.caption("This item will remain in the evidence bundle and export outputs according to policy.")
             return
         
+        # ═══════════════════════════════════════════════════════════════════════
+        # MEMORY PROTECTION: Pixel Guard
+        # ═══════════════════════════════════════════════════════════════════════
+        if not should_render_pixels(ds):
+            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
+            st.warning(f"⚠️ {modality} image too large for browser preview (>150MB raw).")
+            st.caption("Metadata will be processed normally. Pixel data is preserved in export.")
+            return
+        
         arr = ds.pixel_array
         if arr.ndim == 4:
             frame = arr[0].copy()
@@ -1658,6 +1667,12 @@ def dicom_to_pil(dcm_path: str) -> tuple:
     # Check if this DICOM file has pixel data (images) or is metadata-only
     if not hasattr(ds, 'PixelData') or ds.PixelData is None:
         raise ValueError("DICOM file contains no pixel data - cannot convert to image")
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # MEMORY PROTECTION: Pixel Guard
+    # ═══════════════════════════════════════════════════════════════════════
+    if not should_render_pixels(ds):
+        raise MemoryError(f"DICOM too large for pixel rendering (>150MB estimated raw)")
     
     try:
         ds.decompress()
@@ -1978,6 +1993,46 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
             <div style="color: #c9d1d9; font-size: 13px; margin-top: 4px;">
                 Open <code style="background: #21262d; padding: 2px 6px; border-radius: 4px;">DICOM_Viewer.html</code> 
                 to view your processed file
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 12: RUN-SCOPED VIEWER LINK
+    # Shows a direct link to the viewer in the run directory (not the ZIP).
+    # This survives Streamlit reruns and Steam Deck's xdg-document-portal sandboxing.
+    # ═══════════════════════════════════════════════════════════════════════════════
+    run_viewer_path = st.session_state.get('run_scoped_viewer_path')
+    if run_viewer_path and os.path.exists(run_viewer_path):
+        # Use file:// protocol for local access
+        from pathlib import Path
+        viewer_file_url = f"file://{Path(run_viewer_path).as_posix()}"
+        
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, rgba(35, 134, 54, 0.15) 0%, rgba(51, 145, 255, 0.1) 100%); 
+                    border: 1px solid rgba(35, 134, 54, 0.4); 
+                    border-radius: 12px; 
+                    padding: 16px 20px; 
+                    margin: 12px 0;">
+            <div style="font-weight: 600; color: #e6edf3; font-size: 14px; margin-bottom: 8px;">
+                🖼️ Open Viewer (Stable Path)
+            </div>
+            <div style="color: #8b949e; font-size: 13px; margin-bottom: 12px;">
+                This viewer is saved in your run directory and will work even after reloading.
+            </div>
+            <a href="{viewer_file_url}" target="_blank" 
+               style="display: inline-block; 
+                      background: linear-gradient(135deg, #238636 0%, #2ea043 100%); 
+                      color: white; 
+                      padding: 10px 20px; 
+                      border-radius: 8px; 
+                      text-decoration: none; 
+                      font-weight: 600;
+                      box-shadow: 0 2px 8px rgba(35, 134, 54, 0.3);">
+                🔍 Open Viewer in Browser
+            </a>
+            <div style="color: #6e7681; font-size: 11px; margin-top: 10px;">
+                <code style="background: #21262d; padding: 2px 6px; border-radius: 4px;">{run_viewer_path}</code>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -3505,6 +3560,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 research_time_point = "Baseline"
                 research_deid_date = date.today()
                 regenerate_uids = False
+                uid_only_mode = False  # Phase 12: Initialize here so it's always defined
                 exclude_scanned_docs = False
                 output_as_nifti = False
                 include_html_viewer = False  # Phase 6: HTML export viewer
@@ -3732,6 +3788,53 @@ if st.session_state.get('uploaded_dicom_files'):
                     
                     ⚠️ **Note**: This viewer is for convenience only. It does not represent DICOM structure.
                     """)
+                
+                # ═══════════════════════════════════════════════════════════════════
+                # PHASE 12: RESOLVED SETTINGS SUMMARY
+                # Show final resolved settings before Run to prevent "what did I set?" confusion
+                # ═══════════════════════════════════════════════════════════════════
+                st.markdown("---")
+                st.markdown("**📋 Resolved Settings (Before Run)**")
+                
+                # Derive pixel masking status from bucket contents and review session
+                review_session_exists = st.session_state.get('phi_review_session') is not None
+                has_maskable_regions = review_session_exists and st.session_state.phi_review_session.get_summary().get('will_mask', 0) > 0
+                pixel_mask_status = "ON" if has_maskable_regions else "OFF (no regions defined)"
+                
+                # Derive patient tags status from profile
+                if pacs_operation_mode in ["foi_patient", "foi_legal", "foi_legal_chain"]:
+                    patient_tags_status = "PRESERVED (FOI chain of custody)"
+                elif pacs_operation_mode == "internal_repair":
+                    if uid_only_mode:
+                        patient_tags_status = "PRESERVED (UID-only mode)"
+                    else:
+                        patient_tags_status = "CORRECTED (new values applied)"
+                else:  # Research profiles
+                    patient_tags_status = "ANONYMISED (research de-identification)"
+                
+                # UID status (already captured)
+                uid_regen_status = "ON" if regenerate_uids else "OFF"
+                
+                # Display summary in compact format
+                summary_html = f"""
+                <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; margin: 8px 0;">
+                    <table style="width: 100%; font-size: 13px; color: #c9d1d9;">
+                        <tr>
+                            <td style="padding: 4px 0;">🎭 <b>Pixel masking:</b></td>
+                            <td style="padding: 4px 0; color: {'#238636' if has_maskable_regions else '#8b949e'};">{pixel_mask_status}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 4px 0;">📋 <b>Patient tags in DICOM:</b></td>
+                            <td style="padding: 4px 0; color: {'#d29922' if 'PRESERVED' in patient_tags_status or 'CORRECTED' in patient_tags_status else '#238636'};">{patient_tags_status}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 4px 0;">🔄 <b>UID regeneration:</b></td>
+                            <td style="padding: 4px 0; color: {'#238636' if regenerate_uids else '#8b949e'};">{uid_regen_status}</td>
+                        </tr>
+                    </table>
+                </div>
+                """
+                st.markdown(summary_html, unsafe_allow_html=True)
                 
                 # Form submit button
                 st.markdown("---")
@@ -4787,6 +4890,52 @@ Studies in this archive:
                                     # Write JS Global (for file:// protocol support)
                                     index_js = viewer_index.to_js()
                                     zip_file.writestr(f"{root_folder}/viewer/viewer_index.js", index_js.encode('utf-8'))
+                                    
+                                    # ═══════════════════════════════════════════════════════════════
+                                    # PHASE 12 FIX: WRITE VIEWER TO RUN-SCOPED DIRECTORY
+                                    # This ensures viewer paths survive Steam Deck's xdg-document-portal
+                                    # sandboxing, which creates ephemeral /run/user/1000/doc/... paths
+                                    # that disappear after extraction.
+                                    # ═══════════════════════════════════════════════════════════════
+                                    if run_paths:
+                                        run_viewer_dir = run_paths.root / "viewer"
+                                        run_viewer_dir.mkdir(parents=True, exist_ok=True)
+                                        
+                                        # Copy viewer assets
+                                        for asset_name in required_assets:
+                                            asset_path = os.path.join(static_dir, asset_name)
+                                            dst_path = run_viewer_dir / asset_name
+                                            shutil.copy2(asset_path, dst_path)
+                                        
+                                        # Write viewer_index.json
+                                        (run_viewer_dir / "viewer_index.json").write_text(index_json, encoding='utf-8')
+                                        
+                                        # Write viewer_index.js
+                                        (run_viewer_dir / "viewer_index.js").write_text(index_js, encoding='utf-8')
+                                        
+                                        # Copy processed DICOM files and PNGs for viewer
+                                        for file_info in processed_files:
+                                            folder_path = file_info.get('folder_path', 'Processed')
+                                            dcm_dst = run_viewer_dir.parent / folder_path / file_info['filename']
+                                            dcm_dst.parent.mkdir(parents=True, exist_ok=True)
+                                            dcm_dst.write_bytes(file_info['data'])
+                                            
+                                            # Render PNG if image modality
+                                            modality = file_info.get('modality', '')
+                                            if modality.upper() in ['US', 'CT', 'MR', 'DX', 'CR', 'MG', 'XA', 'RF', 'NM', 'PT']:
+                                                try:
+                                                    png_bytes = render_dicom_bytes_to_png(file_info['data'])
+                                                    if png_bytes:
+                                                        png_dst = dcm_dst.with_suffix('.png')
+                                                        png_dst.write_bytes(png_bytes)
+                                                except Exception:
+                                                    pass  # Silent skip
+                                        
+                                        # Store run-scoped viewer path in session state
+                                        run_viewer_html = run_viewer_dir / "viewer.html"
+                                        assert run_viewer_html.exists(), f"Viewer HTML not found: {run_viewer_html}"
+                                        st.session_state.run_scoped_viewer_path = str(run_viewer_html)
+                                        print(f"[Phase12] Run-scoped viewer written: {run_viewer_html}")
                                     
                                 except Exception as viewer_error:
                                     # Viewer is optional - don't fail export if viewer generation fails

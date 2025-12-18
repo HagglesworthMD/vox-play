@@ -23,6 +23,9 @@ RUN_SCOPED_KEYS = {
     'output_folder_name',
     'folder_structure_info',
     
+    # Phase 12: Run-scoped viewer path (stable file:// link)
+    'run_scoped_viewer_path',
+    
     # File analysis / caches
     'uploaded_dicom_files',
     'file_info_cache',

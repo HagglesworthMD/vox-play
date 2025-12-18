@@ -3912,7 +3912,7 @@ if st.session_state.get('uploaded_dicom_files'):
                     output_as_nifti = st.checkbox(
                         "📦 Output as NIfTI (.nii.gz) for AI/ML",
                         value=False,
-                        help="Convert anonymized DICOMs to NIfTI format for PyTorch, TensorFlow, MONAI, etc."
+                        help="Convert anonymised DICOMs to NIfTI format for PyTorch, TensorFlow, MONAI, etc."
                     )
                     
                     if output_as_nifti:

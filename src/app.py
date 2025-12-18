@@ -167,70 +167,144 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 12: SYSTEM OPENER HELPER
+# PHASE 12: LOCAL VIEWER SERVER
 # 
-# Opens files using the system's default application (xdg-open/open/start).
-# Includes guardrails to reject transient paths like /run/user/... or /tmp.
-# This is the ONLY way the UI should open the viewer.
+# Serves the viewer over localhost HTTP to bypass Flatpak/portal sandbox issues.
+# The file:// protocol fails on Steam Deck because xdg-open + Flatpak rewrites
+# access through /run/user/1000/doc/<token>/... which can't load adjacent JS.
+# 
+# Solution: python3 -m http.server on 127.0.0.1 serves run_root, then xdg-open
+# the HTTP URL. Server is reused across button clicks via session state.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _open_viewer_with_system(viewer_path: str) -> tuple[bool, str]:
+import socket
+import subprocess
+import atexit
+
+# Global registry of viewer servers (survives Streamlit reruns)
+_VIEWER_SERVERS: dict = {}  # {run_id: {"port": int, "process": Popen}}
+
+def _find_free_port() -> int:
+    """Find an available port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+def _is_server_running(run_id: str) -> bool:
+    """Check if a viewer server for this run is still running."""
+    if run_id not in _VIEWER_SERVERS:
+        return False
+    proc = _VIEWER_SERVERS[run_id].get("process")
+    if proc is None:
+        return False
+    return proc.poll() is None  # None means still running
+
+def _start_viewer_server(run_root: str, run_id: str) -> tuple[int, str]:
     """
-    Open the viewer HTML file using the system's default browser/opener.
-    
-    Phase 12 UI Hardening:
-    - Uses xdg-open on Linux, open on macOS, start on Windows
-    - Rejects transient paths (/run/user/..., /tmp, etc.)
-    - Only opens from canonical run folder paths
+    Start a local HTTP server for the viewer.
     
     Args:
-        viewer_path: Absolute path to viewer.html
+        run_root: Path to the run directory to serve
+        run_id: Run identifier for server tracking
+        
+    Returns:
+        Tuple of (port, viewer_url)
+    """
+    # Reuse existing server if running
+    if _is_server_running(run_id):
+        port = _VIEWER_SERVERS[run_id]["port"]
+        return port, f"http://127.0.0.1:{port}/viewer/viewer.html"
+    
+    # Find a free port
+    port = _find_free_port()
+    
+    # Start HTTP server as subprocess
+    # Using python3 -m http.server for maximum compatibility
+    proc = subprocess.Popen(
+        ['python3', '-m', 'http.server', str(port), '--bind', '127.0.0.1', '--directory', run_root],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True  # Detach from parent process group
+    )
+    
+    # Register for cleanup
+    _VIEWER_SERVERS[run_id] = {"port": port, "process": proc}
+    
+    # Give server a moment to start
+    import time
+    time.sleep(0.3)
+    
+    return port, f"http://127.0.0.1:{port}/viewer/viewer.html"
+
+def _stop_viewer_server(run_id: str) -> None:
+    """Stop a viewer server if running."""
+    if run_id in _VIEWER_SERVERS:
+        proc = _VIEWER_SERVERS[run_id].get("process")
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        del _VIEWER_SERVERS[run_id]
+
+def _cleanup_all_viewer_servers() -> None:
+    """Cleanup all viewer servers on exit."""
+    for run_id in list(_VIEWER_SERVERS.keys()):
+        _stop_viewer_server(run_id)
+
+# Register cleanup on interpreter exit
+atexit.register(_cleanup_all_viewer_servers)
+
+def _open_viewer_via_localhost(run_root: str, run_id: str) -> tuple[bool, str]:
+    """
+    Open the viewer via localhost HTTP server.
+    
+    Phase 12 UI Hardening:
+    - Serves viewer over http://127.0.0.1:<PORT>
+    - Bypasses Flatpak/portal sandbox issues with file:// protocol
+    - Reuses existing server for same run_id
+    
+    Args:
+        run_root: Path to the run root directory
+        run_id: Run identifier
         
     Returns:
         Tuple of (success: bool, message: str)
     """
-    import subprocess
     import sys
     from pathlib import Path
     
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PHASE 12 GUARDRAIL: Reject transient/unstable paths
-    # These paths are session-derived and won't survive app restarts.
-    # ═══════════════════════════════════════════════════════════════════════════
-    BANNED_PATH_PREFIXES = (
-        '/run/user/',      # xdg-document-portal sandbox paths
-        '/tmp/',           # Temporary filesystem
-        '/var/tmp/',       # Another temp location
-        '/private/tmp/',   # macOS temp
-    )
+    # Verify viewer exists
+    viewer_path = Path(run_root) / "viewer" / "viewer.html"
+    if not viewer_path.exists():
+        return False, f"Viewer not found: {viewer_path}"
     
-    normalized_path = str(Path(viewer_path).resolve())
-    for banned in BANNED_PATH_PREFIXES:
-        if normalized_path.startswith(banned):
-            return False, f"Viewer path is transient ({banned}...) and will not survive. Use run-scoped path."
-    
-    # Verify the file exists
-    if not os.path.exists(viewer_path):
-        return False, f"Viewer file not found: {viewer_path}"
-    
-    # Determine system opener command
     try:
+        # Start or reuse server
+        port, viewer_url = _start_viewer_server(run_root, run_id)
+        
+        # Open in browser via system opener
         if sys.platform == 'linux':
-            subprocess.Popen(['xdg-open', viewer_path], 
-                           stdout=subprocess.DEVNULL, 
+            subprocess.Popen(['xdg-open', viewer_url],
+                           stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
         elif sys.platform == 'darwin':
-            subprocess.Popen(['open', viewer_path],
+            subprocess.Popen(['open', viewer_url],
                            stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
         elif sys.platform == 'win32':
-            os.startfile(viewer_path)  # Windows-specific
+            subprocess.Popen(['start', '', viewer_url],
+                           shell=True,
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
         else:
             return False, f"Unsupported platform: {sys.platform}"
         
-        return True, f"Opened viewer: {viewer_path}"
+        return True, f"Viewer opened: {viewer_url}"
+    
     except Exception as e:
-        return False, f"Failed to open viewer: {e}"
+        return False, f"Failed to start viewer server: {e}"
 
 def _ensure_early_run_context() -> 'RunPaths':
     """
@@ -2064,17 +2138,17 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         """, unsafe_allow_html=True)
     
     # ═══════════════════════════════════════════════════════════════════════════════
-    # PHASE 12: CANONICAL VIEWER (Single Button, System Opener)
+    # PHASE 12: CANONICAL VIEWER (Localhost HTTP Server)
     # 
     # UI Hardening Requirements:
     # 1. Only one "Open Viewer" action (no duplicate buttons)
-    # 2. Uses system opener (xdg-open/open/start), NOT browser URLs
-    # 3. Never opens from ZIP or transient paths
+    # 2. Serves viewer via http://127.0.0.1 to bypass Flatpak sandbox
+    # 3. Never uses file:// protocol (fails with document portal)
     # 4. Shows canonical path for FOI/support reference
     # ═══════════════════════════════════════════════════════════════════════════════
     run_viewer_path = st.session_state.get('run_scoped_viewer_path')
-    if run_viewer_path and os.path.exists(run_viewer_path):
-        # Display viewer panel with system opener button
+    if run_viewer_path and os.path.exists(run_viewer_path) and run_paths:
+        # Display viewer panel with localhost HTTP server button
         st.markdown("""
         <div style="background: linear-gradient(135deg, rgba(35, 134, 54, 0.15) 0%, rgba(51, 145, 255, 0.1) 100%); 
                     border: 1px solid rgba(35, 134, 54, 0.4); 
@@ -2085,14 +2159,14 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
                 🖼️ Export Viewer
             </div>
             <div style="color: #8b949e; font-size: 13px; margin-bottom: 4px;">
-                Opens in your default browser. Works after app restart and across sessions.
+                Opens in your default browser via localhost server.
             </div>
         </div>
         """, unsafe_allow_html=True)
         
-        # System opener button - Phase 12 hardened
-        if st.button("🔍 Open Viewer (Run Folder)", key="open_viewer_system", type="secondary", use_container_width=True):
-            success, message = _open_viewer_with_system(run_viewer_path)
+        # Localhost HTTP server button - Phase 12 hardened
+        if st.button("🔍 Open Viewer", key="open_viewer_localhost", type="secondary", use_container_width=True):
+            success, message = _open_viewer_via_localhost(str(run_paths.root), run_paths.run_id)
             if success:
                 st.success(f"✅ {message}")
             else:

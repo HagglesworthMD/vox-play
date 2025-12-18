@@ -2142,7 +2142,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         
         # Show the download button with explicit bytes
         st.download_button(
-            label=f"📦 Download ZIP (1 file + Viewer)",
+            label="📦 Download Export ZIP",
             data=bytes(zip_data),  # Explicit bytes conversion
             file_name=zip_filename,
             mime="application/zip",
@@ -2180,7 +2180,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
                     padding: 16px 20px; 
                     margin: 12px 0;">
             <div style="font-weight: 600; color: #e6edf3; font-size: 14px; margin-bottom: 8px;">
-                🖼️ Export Viewer
+                🔍 Open Viewer (Run Folder)
             </div>
             <div style="color: #8b949e; font-size: 13px; margin-bottom: 4px;">
                 Opens in your default browser via localhost server.
@@ -2189,7 +2189,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         """, unsafe_allow_html=True)
         
         # Localhost HTTP server button - Phase 12 hardened
-        if st.button("🔍 Open Viewer", key="open_viewer_localhost", type="secondary", use_container_width=True):
+        if st.button("🔍 Open Viewer (Run Folder)", key="open_viewer_localhost", type="secondary", use_container_width=True):
             success, message = _open_viewer_via_localhost(str(run_paths.root), run_paths.run_id)
             if success:
                 st.success(f"✅ {message}")

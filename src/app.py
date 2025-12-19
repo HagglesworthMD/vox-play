@@ -2907,11 +2907,16 @@ if st.session_state.get('uploaded_dicom_files'):
         else:
             # Review panel - collapsed by default
             with st.expander("🔍 **Burned-In PHI Review** (Preview)", expanded=False):
-                st.caption("Sprint 2: Human-in-the-loop review for burned-in text regions")
+                st.caption("Review OCR-detected burned-in text regions. Separate from the Support mask below.")
                 
                 # Status badge
                 if review_session.review_accepted:
-                    st.success("✅ Review accepted - ready for export")
+                    # Phase 13: Clarify message when no OCR regions were detected
+                    summary_for_status = review_session.get_summary()
+                    if summary_for_status['ocr_regions'] == 0 and summary_for_status['manual_regions'] == 0:
+                        st.success("✅ No OCR regions detected — export allowed")
+                    else:
+                        st.success("✅ Review accepted - ready for export")
                 elif review_session.review_started:
                     st.warning("⏳ Review in progress")
                 else:
@@ -3347,7 +3352,7 @@ if st.session_state.get('uploaded_dicom_files'):
             st.markdown("---")
     
     if preview_files:
-        st.markdown("### 🎨 Draw Redaction Mask")
+        st.markdown("### 🎨 Support Mask (Ultrasound/Header)")
         
         # Use US images for mask drawing - documents are handled automatically
         us_images = bucket_us.copy() if bucket_us else []
@@ -3958,10 +3963,35 @@ if st.session_state.get('uploaded_dicom_files'):
                 st.markdown("---")
                 st.markdown("**📋 Resolved Settings (Before Run)**")
                 
-                # Derive pixel masking status from bucket contents and review session
+                # ═══════════════════════════════════════════════════════════════
+                # PHASE 13: Derive SEPARATE status for Support mask vs Burned-in PHI
+                # These are two distinct masking systems that users often conflate
+                # ═══════════════════════════════════════════════════════════════
+                
+                # Support mask status (the US/header rectangle user draws)
+                support_mask_coords = st.session_state.get('us_shared_mask')
+                if support_mask_coords:
+                    smx, smy, smw, smh = support_mask_coords
+                    support_mask_status = f"ON — ({smx},{smy}) {smw}×{smh}px"
+                    has_support_mask = True
+                else:
+                    support_mask_status = "OFF — none"
+                    has_support_mask = False
+                
+                # Burned-in PHI status (OCR-detected regions + manual additions)
                 review_session_exists = st.session_state.get('phi_review_session') is not None
-                has_maskable_regions = review_session_exists and st.session_state.phi_review_session.get_summary().get('will_mask', 0) > 0
-                pixel_mask_status = "ON" if has_maskable_regions else "OFF (no regions defined)"
+                if review_session_exists:
+                    phi_summary = st.session_state.phi_review_session.get_summary()
+                    burned_in_count = phi_summary.get('will_mask', 0)
+                    if burned_in_count > 0:
+                        burned_in_status = f"ON — {burned_in_count} region(s)"
+                        has_burned_in = True
+                    else:
+                        burned_in_status = "OFF — 0 regions"
+                        has_burned_in = False
+                else:
+                    burned_in_status = "OFF — 0 regions"
+                    has_burned_in = False
                 
                 # Derive patient tags status from profile
                 if pacs_operation_mode in ["foi_patient", "foi_legal", "foi_legal_chain"]:
@@ -3977,13 +4007,17 @@ if st.session_state.get('uploaded_dicom_files'):
                 # UID status (already captured)
                 uid_regen_status = "ON" if regenerate_uids else "OFF"
                 
-                # Display summary in compact format
+                # Display summary in compact format with SEPARATE lines for each masking system
                 summary_html = f"""
                 <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; margin: 8px 0;">
                     <table style="width: 100%; font-size: 13px; color: #c9d1d9;">
                         <tr>
-                            <td style="padding: 4px 0;">🎭 <b>Pixel masking:</b></td>
-                            <td style="padding: 4px 0; color: {'#238636' if has_maskable_regions else '#8b949e'};">{pixel_mask_status}</td>
+                            <td style="padding: 4px 0;">🎨 <b>Support mask (US/header):</b></td>
+                            <td style="padding: 4px 0; color: {'#238636' if has_support_mask else '#8b949e'};">{support_mask_status}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 4px 0;">🔎 <b>Burned-in PHI masking (OCR):</b></td>
+                            <td style="padding: 4px 0; color: {'#238636' if has_burned_in else '#8b949e'};">{burned_in_status}</td>
                         </tr>
                         <tr>
                             <td style="padding: 4px 0;">📋 <b>Patient tags in DICOM:</b></td>

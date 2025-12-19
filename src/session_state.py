@@ -95,7 +95,7 @@ def reset_run_state(ss: MutableMapping[str, Any], *, reason: str | None = None) 
     ss.setdefault("uploaded_dicom_files", [])  # Ensure list exists
 
     logger.info(
-        "Run state reset (%s); previous_run_id=%s new_run_id=%s",
+        "PHASE14: run_state_reset (%s); previous_run_id=%s new_run_id=%s",
         reason or "unspecified",
         previous_run_id or "none",
         ss.get(RUN_ID_KEY),

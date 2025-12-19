@@ -2881,8 +2881,12 @@ if st.session_state.get('uploaded_dicom_files'):
             # Freeze-safe: informational only; no gating; no export changes.
             # Phase 2 Hardening: Register deterministic filename → UID mapping
             # ═══════════════════════════════════════════════════════════════════
-            try:
-                review_session = st.session_state.get("phi_review_session")
+            review_session = st.session_state.get("phi_review_session")
+            if review_session is None:
+                logger.error(
+                    "Preflight scan aborted (review_session_unavailable) — findings unavailable for this batch"
+                )
+            else:
                 for f in preview_files:
                     finfo = file_info_cache.get(f.name, {})
                     ftemp_path = finfo.get('temp_path', '')
@@ -2894,7 +2898,7 @@ if st.session_state.get('uploaded_dicom_files'):
                             # Register deterministic file → UID mapping
                             sop_uid = str(getattr(scan_ds, 'SOPInstanceUID', '')) or "unknown"
                             sop_class = str(getattr(scan_ds, 'SOPClassUID', ''))
-                            if sop_uid and sop_class and review_session:
+                            if sop_class and review_session:
                                 review_session.register_file_uid(
                                     filename=f.name,
                                     sop_instance_uid=sop_uid,
@@ -2906,17 +2910,13 @@ if st.session_state.get('uploaded_dicom_files'):
                             if finding is not None and review_session:
                                 review_session.add_finding(finding)
                         except Exception as e:
-                            truncated_sop = (sop_uid or "unknown")[:16]
+                            raw_sop = sop_uid or "unknown"
+                            truncated_sop = (raw_sop[:16] + "…") if len(raw_sop) > 16 else raw_sop
                             logger.warning(
                                 "Preflight scan skipped for SOP %s (%s)",
                                 truncated_sop,
                                 e.__class__.__name__,
                             )
-            except Exception as e:
-                logger.error(
-                    "Preflight scan aborted (%s) — findings unavailable for this batch",
-                    e.__class__.__name__,
-                )
         
         review_session = st.session_state.get("phi_review_session")
         
@@ -3345,7 +3345,11 @@ if st.session_state.get('uploaded_dicom_files'):
                             # Real error - image modality should have displayable pixels
                             logger.error(
                                 "Viewer preview failed for SOP %s (%s)",
-                                (instance.sop_instance_uid or "unknown")[:16],
+                                (
+                                    (instance.sop_instance_uid[:16] + "…")
+                                    if instance.sop_instance_uid and len(instance.sop_instance_uid) > 16
+                                    else (instance.sop_instance_uid or "unknown")
+                                ),
                                 e.__class__.__name__,
                             )
                             st.error("Image preview unavailable. Processing will continue normally.")

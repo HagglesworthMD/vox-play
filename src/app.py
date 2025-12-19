@@ -3979,15 +3979,28 @@ if st.session_state.get('uploaded_dicom_files'):
                     has_support_mask = False
                 
                 # Burned-in PHI status (OCR-detected regions + manual additions)
-                review_session_exists = st.session_state.get('phi_review_session') is not None
-                if review_session_exists:
-                    phi_summary = st.session_state.phi_review_session.get_summary()
-                    burned_in_count = phi_summary.get('will_mask', 0)
-                    if burned_in_count > 0:
-                        burned_in_status = f"ON — {burned_in_count} region(s)"
-                        has_burned_in = True
+                review_session = st.session_state.get('phi_review_session')
+                if review_session is not None:
+                    if hasattr(review_session, "get_summary"):
+                        try:
+                            phi_summary = review_session.get_summary()
+                        except Exception as error:
+                            logging.warning(
+                                "phi_review_session.get_summary failed: %s",
+                                type(error).__name__,
+                            )
+                            burned_in_status = "⚠️ UNKNOWN — review session error"
+                            has_burned_in = False
+                        else:
+                            burned_in_count = phi_summary.get('will_mask', 0)
+                            if burned_in_count > 0:
+                                burned_in_status = f"ON — {burned_in_count} region(s)"
+                                has_burned_in = True
+                            else:
+                                burned_in_status = "OFF — 0 regions"
+                                has_burned_in = False
                     else:
-                        burned_in_status = "OFF — 0 regions"
+                        burned_in_status = "⚠️ UNKNOWN — review session invalid"
                         has_burned_in = False
                 else:
                     burned_in_status = "OFF — 0 regions"

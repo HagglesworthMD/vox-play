@@ -518,10 +518,16 @@ def init_session_state_defaults():
     # Processing State
     if 'processing_complete' not in ss:
         ss['processing_complete'] = False
+    if 'processed_files' not in ss:
+        ss['processed_files'] = []
     if 'processed_file_path' not in ss:
         ss['processed_file_path'] = None
     if 'processed_file_data' not in ss:
         ss['processed_file_data'] = None
+    if 'output_zip_buffer' not in ss:
+        ss['output_zip_buffer'] = None
+    if 'processing_stats' not in ss:
+        ss['processing_stats'] = None
     
     # Audit & Hashes
     if 'audit_text' not in ss:
@@ -532,6 +538,8 @@ def init_session_state_defaults():
         ss['input_file_hash'] = None
     if 'output_file_hash' not in ss:
         ss['output_file_hash'] = None
+    if 'combined_audit_logs' not in ss:
+        ss['combined_audit_logs'] = None
 
     # Review Session
     if 'phi_review_session' not in ss:

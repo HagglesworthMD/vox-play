@@ -57,7 +57,8 @@ st.markdown(
 # BUILD FINGERPRINT (logged on startup, no UI impact)
 # ==============================================================================
 import logging, subprocess
-logging.info(
+logger = logging.getLogger(__name__)
+logger.info(
     "VoxelMask build %s",
     subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
 )
@@ -2880,32 +2881,42 @@ if st.session_state.get('uploaded_dicom_files'):
             # Freeze-safe: informational only; no gating; no export changes.
             # Phase 2 Hardening: Register deterministic filename → UID mapping
             # ═══════════════════════════════════════════════════════════════════
-            try:
+            review_session = st.session_state.get("phi_review_session")
+            if review_session is None:
+                logger.error(
+                    "Preflight scan aborted (review_session_unavailable) — findings unavailable for this batch"
+                )
+            else:
                 for f in preview_files:
                     finfo = file_info_cache.get(f.name, {})
                     ftemp_path = finfo.get('temp_path', '')
                     if ftemp_path and os.path.exists(ftemp_path):
+                        sop_uid = "unknown"
                         try:
                             scan_ds = pydicom.dcmread(ftemp_path, force=True, stop_before_pixels=True)
-                            
+
                             # Register deterministic file → UID mapping
-                            sop_uid = str(getattr(scan_ds, 'SOPInstanceUID', ''))
+                            sop_uid = str(getattr(scan_ds, 'SOPInstanceUID', '')) or "unknown"
                             sop_class = str(getattr(scan_ds, 'SOPClassUID', ''))
-                            if sop_uid and sop_class:
-                                st.session_state.get("phi_review_session").register_file_uid(
+                            if sop_class and review_session:
+                                review_session.register_file_uid(
                                     filename=f.name,
                                     sop_instance_uid=sop_uid,
                                     sop_class_uid=sop_class
                                 )
-                            
+
                             # Preflight scan for findings
                             finding = preflight_scan_dataset(scan_ds)
-                            if finding is not None:
-                                st.session_state.get("phi_review_session").add_finding(finding)
-                        except Exception:
-                            pass  # Skip files that can't be read - non-fatal
-            except Exception:
-                pass  # Preflight scan failure is non-fatal - do not block session
+                            if finding is not None and review_session:
+                                review_session.add_finding(finding)
+                        except Exception as e:
+                            raw_sop = sop_uid or "unknown"
+                            truncated_sop = (raw_sop[:16] + "…") if len(raw_sop) > 16 else raw_sop
+                            logger.warning(
+                                "Preflight scan skipped for SOP %s (%s)",
+                                truncated_sop,
+                                e.__class__.__name__,
+                            )
         
         review_session = st.session_state.get("phi_review_session")
         
@@ -3332,11 +3343,20 @@ if st.session_state.get('uploaded_dicom_files'):
                             st.image(pil_img, use_container_width=True)
                         except Exception as e:
                             # Real error - image modality should have displayable pixels
+                            logger.error(
+                                "Viewer preview failed for SOP %s (%s)",
+                                (
+                                    (instance.sop_instance_uid[:16] + "…")
+                                    if instance.sop_instance_uid and len(instance.sop_instance_uid) > 16
+                                    else (instance.sop_instance_uid or "unknown")
+                                ),
+                                e.__class__.__name__,
+                            )
                             st.error("Image preview unavailable. Processing will continue normally.")
                     else:
                         # Non-image modality (OT, SC, SR, DOC, etc.) - neutral placeholder
                         st.markdown("""
-                        <div style="background: rgba(139, 148, 158, 0.08); 
+                        <div style="background: rgba(139, 148, 158, 0.08);
                                     border: 1px solid rgba(139, 148, 158, 0.25); 
                                     border-radius: 12px; 
                                     padding: 40px 30px; 

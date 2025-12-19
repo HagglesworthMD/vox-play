@@ -64,3 +64,27 @@ def test_reset_is_deterministic_in_clearing():
     }
     reset_run_state(ss)
     assert ss[SAFE_KEY] == "user@example.com"
+
+
+def test_reset_run_state_sets_safe_defaults_and_regenerates_run_id():
+    """
+    Ensures run-scoped keys are cleared, a new RUN_ID is set, and safe defaults exist.
+    """
+    ss: Dict[str, Any] = {
+        RUN_ID_KEY: "baseline",
+        "viewer_state": {"zoom": 2},
+        "selected_series_uid": "1.2.3",  # should be cleared then defaulted to None
+        "selected_instance_idx": 5,  # should be reset to 0
+        "phi_review_session": "session",
+        "uploaded_dicom_files": ["a.dcm"],
+    }
+
+    prev_run_id = reset_run_state(ss, reason="unit_test")
+
+    assert prev_run_id == "baseline"
+    assert ss[RUN_ID_KEY] != "baseline"
+    assert "viewer_state" not in ss
+    assert ss.get("selected_series_uid") is None
+    assert ss.get("selected_instance_idx") == 0
+    assert ss.get("phi_review_session") is None
+    assert ss.get("uploaded_dicom_files") == []

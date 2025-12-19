@@ -1,7 +1,10 @@
 # src/session_state.py
 from __future__ import annotations
 from typing import Any, MutableMapping
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 
 RUN_ID_KEY = "run_id"
 
@@ -90,5 +93,12 @@ def reset_run_state(ss: MutableMapping[str, Any], *, reason: str | None = None) 
     ss.setdefault("selected_series_uid", None)
     ss.setdefault("phi_review_session", None)  # Ensure key exists even if cleared
     ss.setdefault("uploaded_dicom_files", [])  # Ensure list exists
-    
+
+    logger.info(
+        "Run state reset (%s); previous_run_id=%s new_run_id=%s",
+        reason or "unspecified",
+        previous_run_id or "none",
+        ss.get(RUN_ID_KEY),
+    )
+
     return previous_run_id

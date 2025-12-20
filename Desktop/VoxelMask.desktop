@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=VoxelMask
+Exec=konsole --hold -e bash -lc '"/home/deck/voxelmask testing/VOXELMASK-4/run_voxelmask.sh"'
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;

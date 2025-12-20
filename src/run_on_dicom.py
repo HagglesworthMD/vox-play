@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import gc
 import hashlib
 import sys
 import uuid
@@ -844,7 +845,7 @@ def process_dicom(  # pragma: no cover
 
     # Decompress pixels (required for OpenCV editing)
     # Note: pydicom usually converts YBR* to RGB automatically on decompress
-    if pixel_processing_enabled:
+    if locals().get("pixel_processing_enabled"):
         print("Decompressing pixel data...")
         try:
             ds.decompress()
@@ -853,7 +854,7 @@ def process_dicom(  # pragma: no cover
 
 
     # Get pixel array
-    if pixel_processing_enabled:
+    if locals().get("pixel_processing_enabled"):
         try:
             arr = ds.pixel_array.copy()  # Copy to ensure writability
             # EVIDENCE: Compute source pixel hash BEFORE any modification (Model B backbone)
@@ -1298,7 +1299,7 @@ def process_dicom(  # pragma: no cover
         del ds.NumberOfFrames
 
     # Update pixel data (ONLY if we processed it)
-    if pixel_processing_enabled and arr_out is not None:
+    if locals().get("pixel_processing_enabled") and arr_out is not None:
         ds.PixelData = arr_out.tobytes()
 
         # Reset compression to Explicit VR Little Endian (uncompressed) only if we changed pixels
@@ -1358,6 +1359,15 @@ def process_dicom(  # pragma: no cover
             )
         except Exception as le:
             print(f"[EVIDENCE] Warning: Could not log linkage/decision: {le}")
+
+    if locals().get("pixel_processing_enabled"):
+        if 'arr' in locals():
+            del arr
+        if 'arr_original_depth' in locals():
+            del arr_original_depth
+        if 'arr_out' in locals():
+            del arr_out
+        gc.collect()
 
     print("Processing complete!")
     return True

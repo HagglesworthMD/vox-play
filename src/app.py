@@ -3273,7 +3273,11 @@ if st.session_state.get('uploaded_dicom_files'):
             st.session_state.viewer_needs_rebuild = False
         
         viewer_state: ViewerStudyState = st.session_state.viewer_state
-        
+
+        # Inform when viewer is intentionally disabled for large series
+        for note in getattr(viewer_state, "disabled_series_notes", []) or []:
+            st.info(note)
+
         if viewer_state and viewer_state.series_list:
             st.markdown("### 📂 Series Browser")
             st.caption("Navigate through series and images. Ordering is preserved from source.")

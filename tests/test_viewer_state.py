@@ -37,6 +37,7 @@ from viewer_state import (
     parse_baseline_manifest_series_order,
     get_instance_ordering_label,
     get_series_ordering_label,
+    MAX_US_VIEWER_INSTANCES,
 )
 
 
@@ -182,6 +183,54 @@ class TestOrderedManifestPriority:
         assert series.instances[0].stack_position == 1
         assert series.instances[1].stack_position == 2
         assert series.instances[2].stack_position == 3
+
+
+class TestUltrasoundViewerGuard:
+    def test_skips_large_ultrasound_series(self):
+        """Large ultrasound series should be excluded from viewer construction."""
+        us_files = [make_mock_file(f"us_{i}.dcm") for i in range(MAX_US_VIEWER_INSTANCES + 1)]
+        ct_file = make_mock_file("ct_0.dcm")
+
+        entries = [
+            {
+                'filename': f"us_{i}.dcm",
+                'sop_instance_uid': f"US_SOP_{i}",
+                'series_instance_uid': 'US_SERIES',
+                'instance_number': i,
+                'modality': 'US',
+                'series_desc': 'Ultrasound Large',
+            }
+            for i in range(MAX_US_VIEWER_INSTANCES + 1)
+        ]
+        entries.append(
+            {
+                'filename': 'ct_0.dcm',
+                'sop_instance_uid': 'CT_SOP_1',
+                'series_instance_uid': 'CT_SERIES',
+                'instance_number': 1,
+                'modality': 'CT',
+                'series_desc': 'CT Head',
+            }
+        )
+
+        cache = make_file_info_cache(entries)
+
+        state = build_viewer_state(
+            preview_files=us_files + [ct_file],
+            file_info_cache=cache,
+        )
+
+        # Ultrasound series should be skipped entirely
+        assert all(s.series_instance_uid != 'US_SERIES' for s in state.series_list)
+
+        # Other series continue to appear in viewer
+        assert any(s.series_instance_uid == 'CT_SERIES' for s in state.series_list)
+
+        # UI should surface informational note about the skipped series
+        assert any(
+            "Viewer disabled for large ultrasound series" in note
+            for note in state.disabled_series_notes
+        )
     
     def test_falls_back_to_instance_number_when_no_manifest(self):
         """Without manifest, should sort by instance_number."""

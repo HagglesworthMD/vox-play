@@ -132,7 +132,7 @@ def estimate_pixel_memory(ds: pydicom.Dataset) -> int:
         return 0
 
 
-def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 150_000_000) -> bool:
+def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 75_000_000) -> bool:
     """
     Check if a DICOM dataset is too large for safe pixel rendering.
     
@@ -140,7 +140,8 @@ def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 150_000
     
     Args:
         ds: pydicom Dataset
-        max_raw_pixel_bytes: Limit (default 150MB - conservative for Steam Deck shared RAM)
+        max_raw_pixel_bytes: Limit (default 75MB - conservative for Steam Deck shared RAM,
+                             accounting for decompression overhead and copy operations)
         
     Returns:
         True if safe to render, False if exceeds limit
@@ -168,3 +169,71 @@ def evaluate_us_mask_memory_guard(ds: pydicom.Dataset, max_mb: int) -> tuple[boo
     est_bytes = estimate_pixel_memory(ds)
     est_mb = est_bytes / (1024 * 1024)
     return est_mb > max_mb, est_mb
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FILE SIZE PRE-FLIGHT GUARD
+# Phase 13: Prevents OOM by checking compressed file size BEFORE pydicom read
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Conservative limit for interactive pilot mode on memory-constrained systems
+# This is the COMPRESSED file size - actual decompressed size may be 5-10x larger
+MAX_DICOM_FILE_BYTES_INTERACTIVE = 50_000_000  # 50 MB
+
+
+def check_file_size_limit(
+    file_path: str, 
+    max_bytes: int = MAX_DICOM_FILE_BYTES_INTERACTIVE
+) -> tuple[bool, int]:
+    """
+    Pre-flight check: Verify file size is within limits BEFORE loading.
+    
+    This check runs BEFORE any pydicom operations to prevent OOM on
+    memory-constrained systems (e.g., Steam Deck with high background load).
+    
+    Args:
+        file_path: Path to DICOM file
+        max_bytes: Maximum allowed file size in bytes (default: 50MB)
+        
+    Returns:
+        Tuple of (is_safe: bool, file_size_bytes: int)
+        
+    Design note:
+        This is the FIRST line of defense. It checks compressed file size,
+        which is much smaller than decompressed pixel data. If this fails,
+        we skip the file entirely without risking OOM.
+    """
+    import os
+    try:
+        file_size = os.path.getsize(file_path)
+        return file_size <= max_bytes, file_size
+    except (OSError, IOError):
+        # If we can't stat the file, assume it's safe (will fail on read anyway)
+        return True, 0
+
+
+def require_file_size_limit(
+    file_path: str,
+    max_bytes: int = MAX_DICOM_FILE_BYTES_INTERACTIVE,
+    context: str = "interactive mode"
+) -> None:
+    """
+    Pre-flight check that raises MemoryError if file is too large.
+    
+    Use this at the top of any function that reads DICOM files interactively.
+    
+    Args:
+        file_path: Path to DICOM file
+        max_bytes: Maximum allowed file size in bytes
+        context: Description for error message (e.g., "preview", "masking")
+        
+    Raises:
+        MemoryError: If file exceeds size limit
+    """
+    is_safe, file_size = check_file_size_limit(file_path, max_bytes)
+    if not is_safe:
+        raise MemoryError(
+            f"DICOM file too large for {context} "
+            f"({file_size / 1e6:.1f} MB > {max_bytes / 1e6:.0f} MB limit). "
+            f"Consider processing in batch mode or reducing background applications."
+        )

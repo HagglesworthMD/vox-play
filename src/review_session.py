@@ -334,6 +334,10 @@ class ReviewSession:
     created_at: str
     review_findings: List[ReviewFinding] = field(default_factory=list)
     file_uid_mapping: Dict[str, str] = field(default_factory=dict)  # filename → SOPInstanceUID
+    # Phase 13: Draft overrides for UI stability (prevents Streamlit rerun storms)
+    # Maps region_id → staged RegionAction (not applied until commit_draft)
+    _draft_overrides: Dict[str, str] = field(default_factory=dict)  # region_id → RegionAction
+    _draft_deleted: set = field(default_factory=set)  # region_ids marked for deletion in draft
     
     @classmethod
     def create(cls, sop_instance_uid: str) -> "ReviewSession":
@@ -347,7 +351,10 @@ class ReviewSession:
             created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             review_findings=[],
             file_uid_mapping={},
+            _draft_overrides={},
+            _draft_deleted=set(),
         )
+
     
     def _check_not_sealed(self) -> None:
         """Raise if session is sealed."""
@@ -469,13 +476,142 @@ class ReviewSession:
             if region.source == RegionSource.MANUAL:
                 region.mark_deleted()
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 13: DRAFT LAYER (UI Stability / Streamlit Rerun Prevention)
+    # Draft methods stage changes without mutating base region state.
+    # Changes are applied atomically when commit_draft() is called at processing time.
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def draft_toggle_region(self, region_id: str) -> None:
+        """Stage a toggle without mutating base region."""
+        self._check_not_sealed()
+        current = self.get_effective_action_with_draft(region_id)
+        if current == RegionAction.MASK:
+            self._draft_overrides[region_id] = RegionAction.UNMASK
+        else:
+            self._draft_overrides[region_id] = RegionAction.MASK
+        # Mark review as started
+        self.review_started = True
+    
+    def draft_mask_all_detected(self) -> None:
+        """Stage mask-all for OCR regions without mutating base."""
+        self._check_not_sealed()
+        for r in self.regions:
+            if r.source == RegionSource.OCR and r.region_id not in self._draft_deleted:
+                self._draft_overrides[r.region_id] = RegionAction.MASK
+        self.review_started = True
+    
+    def draft_unmask_all(self) -> None:
+        """Stage unmask-all without mutating base."""
+        self._check_not_sealed()
+        for r in self.regions:
+            if r.region_id not in self._draft_deleted:
+                self._draft_overrides[r.region_id] = RegionAction.UNMASK
+        self.review_started = True
+    
+    def draft_reset_to_defaults(self) -> None:
+        """Stage reset to defaults: clear OCR overrides, mark manual regions as deleted."""
+        self._check_not_sealed()
+        for r in self.regions:
+            if r.source == RegionSource.OCR:
+                # Remove override to use default
+                self._draft_overrides.pop(r.region_id, None)
+            elif r.source == RegionSource.MANUAL:
+                self._draft_deleted.add(r.region_id)
+    
+    def draft_delete_region(self, region_id: str) -> None:
+        """Stage deletion of a manual region."""
+        self._check_not_sealed()
+        for r in self.regions:
+            if r.region_id == region_id:
+                if r.source != RegionSource.MANUAL:
+                    raise ValueError("OCR regions cannot be deleted")
+                self._draft_deleted.add(region_id)
+                return
+        raise ValueError(f"Region not found: {region_id}")
+    
+    def draft_clear_manual_regions(self) -> None:
+        """Stage deletion of all manual regions."""
+        self._check_not_sealed()
+        for r in self.regions:
+            if r.source == RegionSource.MANUAL:
+                self._draft_deleted.add(r.region_id)
+    
+    def get_effective_action_with_draft(self, region_id: str) -> str:
+        """Get effective action with draft override applied (for UI display)."""
+        # Check draft override first
+        if region_id in self._draft_overrides:
+            return self._draft_overrides[region_id]
+        # Fall back to base region
+        for r in self.regions:
+            if r.region_id == region_id:
+                return r.get_effective_action()
+        return RegionAction.MASK  # Fallback
+    
+    def is_deleted_with_draft(self, region_id: str) -> bool:
+        """Check if region is deleted (base or draft)."""
+        if region_id in self._draft_deleted:
+            return True
+        for r in self.regions:
+            if r.region_id == region_id:
+                return r.is_deleted()
+        return False
+    
+    def commit_draft(self) -> None:
+        """
+        Apply draft overrides to base regions. Called at processing time.
+        
+        This is the only place where draft changes become "real".
+        """
+        # Apply action overrides
+        for region_id, action in self._draft_overrides.items():
+            for r in self.regions:
+                if r.region_id == region_id:
+                    r.reviewer_action = action
+                    break
+        
+        # Apply deletions
+        for region_id in self._draft_deleted:
+            for r in self.regions:
+                if r.region_id == region_id and r.source == RegionSource.MANUAL:
+                    r.mark_deleted()
+                    break
+        
+        # Clear draft state
+        self._draft_overrides.clear()
+        self._draft_deleted.clear()
+    
+    def clear_draft(self) -> None:
+        """Discard all staged changes."""
+        self._draft_overrides.clear()
+        self._draft_deleted.clear()
+    
+    def has_draft_changes(self) -> bool:
+        """Check if there are any staged changes."""
+        return bool(self._draft_overrides) or bool(self._draft_deleted)
+    
     def get_regions(self) -> List[ReviewRegion]:
         """Get all regions (including deleted)."""
         return list(self.regions)
     
-    def get_active_regions(self) -> List[ReviewRegion]:
-        """Get all non-deleted regions."""
-        return [r for r in self.regions if not r.is_deleted()]
+    def get_active_regions(self, apply_draft: bool = True) -> List[ReviewRegion]:
+        """
+        Get all non-deleted regions.
+        
+        Args:
+            apply_draft: If True (default), reflect draft state for UI display.
+                         Processing should call commit_draft() first, then pass False.
+        """
+        result = []
+        for r in self.regions:
+            # Check deletion: base + draft
+            if r.is_deleted():
+                continue
+            if apply_draft and r.region_id in self._draft_deleted:
+                continue
+            result.append(r)
+        return result
+
     
     def get_masked_regions(self) -> List[ReviewRegion]:
         """Get all regions that will be masked."""

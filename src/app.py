@@ -21,6 +21,50 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# ==============================================================================
+# RERUN FUSE (ANTI-GRAVITY STABLE)
+# ==============================================================================
+def _apply_rerun_fuse():
+    """
+    Prevent infinite rerun loops by tracking reruns without meaningful state changes.
+    Pattern: After an action executes, it transitions to 'idle' on the next run.
+    We only count reruns when 'idle' repeats without user interaction.
+    """
+    ss = st.session_state
+    if 'rerun_count' not in ss:
+        ss.rerun_count = 0
+        ss.executed_action = "initial"
+    
+    _current_exec = ss.get('executed_action', 'unknown')
+    _last_exec = ss.get('_fuse_last_exec', 'none')
+    
+    # If an action was just executed (not idle/initial), transition to idle
+    if _current_exec not in ('idle', 'initial', 'none') and _current_exec == _last_exec:
+        # Action was consumed on the previous run, now transition to idle
+        ss.executed_action = 'idle'
+        _current_exec = 'idle'
+    
+    if _current_exec != _last_exec:
+        ss.rerun_count = 0
+        ss._fuse_last_exec = _current_exec
+    else:
+        ss.rerun_count += 1
+    
+    # Only trip fuse during idle state (no user action pending)
+    if ss.rerun_count > 50 and _current_exec == 'idle':
+        st.error(f"⚠️ RERUN LOOP DETECTED! The UI is unstable. Please refresh the page.")
+        st.stop()
+
+    # Log to console with callback debug (every 5th rerun to reduce noise)
+    if ss.rerun_count % 5 == 0 or ss.rerun_count < 3:
+        import sys
+        _last_cb = ss.get('_debug_last_callback', 'none')
+        print(f"[DEBUG] RERUN #{ss.rerun_count} (last_exec: {_current_exec}, last_cb: {_last_cb})", file=sys.stderr, flush=True)
+    ss._debug_last_callback = 'none'  # Reset for next run
+
+_apply_rerun_fuse()
+
+
 # ------------------------------------------------------------------------------
 # SIDEBAR & LAYOUT KILL SWITCH
 # (Survives Streamlit >=1.30, reruns, hot reloads, imported modules)
@@ -58,10 +102,16 @@ st.markdown(
 # ==============================================================================
 import logging, subprocess
 logger = logging.getLogger(__name__)
-logger.info(
-    "VoxelMask build %s",
-    subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-)
+try:
+    _git_sha = subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"], 
+        text=True, 
+        stderr=subprocess.DEVNULL
+    ).strip()
+except (FileNotFoundError, subprocess.CalledProcessError):
+    _git_sha = "unknown"
+logger.info("VoxelMask build %s", _git_sha)
+
 
 # ==============================================================================
 # AFTER THIS POINT:
@@ -141,7 +191,7 @@ generate_audit_receipt = _audit_module.generate_audit_receipt
 from research_mode.anonymizer import DicomAnonymizer, AnonymizationConfig
 from interactive_canvas import draw_canvas_with_image
 from compliance_engine import DicomComplianceManager
-from utils import should_render_pixels, evaluate_us_mask_memory_guard  # Memory guard
+from utils import should_render_pixels, evaluate_us_mask_memory_guard, require_file_size_limit  # Memory guard
 from nifti_handler import NiftiConverter, convert_dataset_to_nifti, generate_nifti_readme, generate_fallback_warning_file, check_dicom2nifti_available
 from foi_engine import FOIEngine, process_foi_request, exclude_scanned_documents
 from pdf_reporter import PDFReporter, create_report
@@ -557,6 +607,20 @@ def init_session_state_defaults():
     # Review Session
     if 'phi_review_session' not in ss:
         ss['phi_review_session'] = None
+        
+    # Phase 13: Action Tracking
+    # pending_action: Set by buttons, consumed by logic
+    # executed_action: The last successfully processed action (for rerun fuse)
+    if 'pending_action' not in ss:
+        ss['pending_action'] = None
+    if 'executed_action' not in ss:
+        ss['executed_action'] = "initial"
+        
+    # Cleanup legacy keys that might collide with new button keys
+    legacy_keys = ["bulk_mask_all", "bulk_unmask_all", "bulk_reset", "add_manual_region", "clear_manual", "accept_review", "last_action"]
+    for lk in legacy_keys:
+        if lk in ss:
+            del ss[lk]
 
     # Selection Scope (User Preference - Preserved)
     if 'selection_scope' not in ss:
@@ -1755,28 +1819,42 @@ def display_preview_with_mask_hybrid(dcm_path: str, mask_coords: tuple, caption:
 def display_preview(dcm_path: str, caption: str):
     """Display middle frame preview from DICOM."""
     try:
-        ds = pydicom.dcmread(dcm_path, force=True)
+        # ═══════════════════════════════════════════════════════════════════════
+        # PRE-FLIGHT: File size check (BEFORE any pydicom operations!)
+        # ═══════════════════════════════════════════════════════════════════════
+        require_file_size_limit(dcm_path, context="preview")
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # PHASE 1: Read metadata only (no pixel allocation)
+        # ═══════════════════════════════════════════════════════════════════════
+        ds_meta = pydicom.dcmread(dcm_path, force=True, stop_before_pixels=True)
+        
         # Add fallback for missing TransferSyntaxUID
-        if not hasattr(ds, 'file_meta') or not hasattr(ds.file_meta, 'TransferSyntaxUID'):
-            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+        if not hasattr(ds_meta, 'file_meta') or not hasattr(ds_meta.file_meta, 'TransferSyntaxUID'):
+            ds_meta.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
         
         # Check if this DICOM file has pixel data (images) or is metadata-only
-        if not hasattr(ds, 'PixelData') or ds.PixelData is None:
+        has_image_dims = hasattr(ds_meta, 'Rows') and hasattr(ds_meta, 'Columns')
+        if not has_image_dims:
             # Phase 12: Neutral placeholder for non-image objects
-            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
+            modality = str(getattr(ds_meta, 'Modality', 'UNK')).upper()
             st.info(f"📄 Non-image object ({modality}). Preview is not available.")
             st.caption("This item will remain in the evidence bundle and export outputs according to policy.")
             return
             
         # ═══════════════════════════════════════════════════════════════════════
-        # MEMORY PROTECTION: Pixel Guard
+        # MEMORY PROTECTION: Pixel Guard (BEFORE loading pixels!)
         # ═══════════════════════════════════════════════════════════════════════
-        if not should_render_pixels(ds):
-            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
-            st.warning(f"⚠️ {modality} image too large for browser preview (>150MB raw).")
+        if not should_render_pixels(ds_meta):
+            modality = str(getattr(ds_meta, 'Modality', 'UNK')).upper()
+            st.warning(f"⚠️ {modality} image too large for browser preview (>75MB raw).")
             st.caption("Metadata will be processed normally. Pixel data is preserved in export.")
             return
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # PHASE 2: Safe to load pixels - read full file
+        # ═══════════════════════════════════════════════════════════════════════
+        ds = pydicom.dcmread(dcm_path, force=True)
         arr = ds.pixel_array
         if arr.ndim == 4:
             frame = arr[len(arr)//2]
@@ -1799,28 +1877,42 @@ def display_preview(dcm_path: str, caption: str):
 def display_preview_with_mask(dcm_path: str, mask_coords: tuple, caption: str):
     """Display preview with red rectangle showing mask area."""
     try:
-        ds = pydicom.dcmread(dcm_path, force=True)
+        # ═══════════════════════════════════════════════════════════════════════
+        # PRE-FLIGHT: File size check (BEFORE any pydicom operations!)
+        # ═══════════════════════════════════════════════════════════════════════
+        require_file_size_limit(dcm_path, context="mask preview")
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # PHASE 1: Read metadata only (no pixel allocation)
+        # ═══════════════════════════════════════════════════════════════════════
+        ds_meta = pydicom.dcmread(dcm_path, force=True, stop_before_pixels=True)
+        
         # Add fallback for missing TransferSyntaxUID
-        if not hasattr(ds, 'file_meta') or not hasattr(ds.file_meta, 'TransferSyntaxUID'):
-            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+        if not hasattr(ds_meta, 'file_meta') or not hasattr(ds_meta.file_meta, 'TransferSyntaxUID'):
+            ds_meta.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
         
         # Check if this DICOM file has pixel data (images) or is metadata-only
-        if not hasattr(ds, 'PixelData') or ds.PixelData is None:
+        has_image_dims = hasattr(ds_meta, 'Rows') and hasattr(ds_meta, 'Columns')
+        if not has_image_dims:
             # Phase 12: Neutral placeholder for non-image objects
-            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
+            modality = str(getattr(ds_meta, 'Modality', 'UNK')).upper()
             st.info(f"📄 Non-image object ({modality}). Preview is not available.")
             st.caption("This item will remain in the evidence bundle and export outputs according to policy.")
             return
         
         # ═══════════════════════════════════════════════════════════════════════
-        # MEMORY PROTECTION: Pixel Guard
+        # MEMORY PROTECTION: Pixel Guard (BEFORE loading pixels!)
         # ═══════════════════════════════════════════════════════════════════════
-        if not should_render_pixels(ds):
-            modality = str(getattr(ds, 'Modality', 'UNK')).upper()
-            st.warning(f"⚠️ {modality} image too large for browser preview (>150MB raw).")
+        if not should_render_pixels(ds_meta):
+            modality = str(getattr(ds_meta, 'Modality', 'UNK')).upper()
+            st.warning(f"⚠️ {modality} image too large for browser preview (>75MB raw).")
             st.caption("Metadata will be processed normally. Pixel data is preserved in export.")
             return
         
+        # ═══════════════════════════════════════════════════════════════════════
+        # PHASE 2: Safe to load pixels - read full file
+        # ═══════════════════════════════════════════════════════════════════════
+        ds = pydicom.dcmread(dcm_path, force=True)
         arr = ds.pixel_array
         if arr.ndim == 4:
             frame = arr[0].copy()
@@ -1844,20 +1936,37 @@ def display_preview_with_mask(dcm_path: str, mask_coords: tuple, caption: str):
 
 def dicom_to_pil(dcm_path: str) -> tuple:
     """Convert DICOM to PIL Image, return (pil_image, original_width, original_height)."""
-    ds = pydicom.dcmread(dcm_path, force=True)
+    # ═══════════════════════════════════════════════════════════════════════
+    # PRE-FLIGHT: File size check (BEFORE any pydicom operations!)
+    # ═══════════════════════════════════════════════════════════════════════
+    require_file_size_limit(dcm_path, context="image conversion")
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 1: Read metadata only (no pixel allocation)
+    # ═══════════════════════════════════════════════════════════════════════
+    ds_meta = pydicom.dcmread(dcm_path, force=True, stop_before_pixels=True)
+    
     # Add fallback for missing TransferSyntaxUID
-    if not hasattr(ds, 'file_meta') or not hasattr(ds.file_meta, 'TransferSyntaxUID'):
-        ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+    if not hasattr(ds_meta, 'file_meta') or not hasattr(ds_meta.file_meta, 'TransferSyntaxUID'):
+        ds_meta.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
     
     # Check if this DICOM file has pixel data (images) or is metadata-only
-    if not hasattr(ds, 'PixelData') or ds.PixelData is None:
+    # Note: When using stop_before_pixels, PixelData won't be present even if the file has pixels
+    # We check for Rows/Columns as a proxy for image data
+    has_image_dims = hasattr(ds_meta, 'Rows') and hasattr(ds_meta, 'Columns')
+    if not has_image_dims:
         raise ValueError("DICOM file contains no pixel data - cannot convert to image")
     
     # ═══════════════════════════════════════════════════════════════════════
-    # MEMORY PROTECTION: Pixel Guard
+    # MEMORY PROTECTION: Pixel Guard (BEFORE loading pixels!)
     # ═══════════════════════════════════════════════════════════════════════
-    if not should_render_pixels(ds):
-        raise MemoryError(f"DICOM too large for pixel rendering (>150MB estimated raw)")
+    if not should_render_pixels(ds_meta):
+        raise MemoryError(f"DICOM too large for pixel rendering (>75MB estimated raw)")
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 2: Safe to load pixels - read full file
+    # ═══════════════════════════════════════════════════════════════════════
+    ds = pydicom.dcmread(dcm_path, force=True)
     
     try:
         ds.decompress()
@@ -2755,6 +2864,7 @@ if st.session_state.get('uploaded_dicom_files'):
     
     if selection_scope.include_images:
         preview_files.extend(bucket_us.copy() if bucket_us else [])
+        preview_files.extend(bucket_safe.copy() if bucket_safe else [])  # Include CT/MR/XR
     
     if selection_scope.include_documents:
         preview_files.extend(bucket_docs.copy() if bucket_docs else [])
@@ -2946,6 +3056,61 @@ if st.session_state.get('uploaded_dicom_files'):
         
         review_session = st.session_state.get("phi_review_session")
         
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PHASE 13: CONSUME PENDING ACTION (DRAFT PATTERN)
+        # Draft methods stage changes without mutating base state.
+        # Changes commit at processing time (commit_draft), not during UI reruns.
+        # ═══════════════════════════════════════════════════════════════════════════
+        if review_session and st.session_state.get('pending_action'):
+            _action = st.session_state.pending_action
+            st.session_state.pending_action = None # CONSUME FIRST
+            
+            if _action == "bulk_mask_all":
+                review_session.draft_mask_all_detected()
+                st.session_state.executed_action = "bulk_mask_all"
+                # No st.rerun() - Streamlit reruns naturally after callback
+                
+            elif _action == "bulk_unmask_all":
+                review_session.draft_unmask_all()
+                st.session_state.executed_action = "bulk_unmask_all"
+                
+            elif _action == "bulk_reset":
+                review_session.draft_reset_to_defaults()
+                st.session_state.executed_action = "bulk_reset"
+                
+            elif _action == "add_manual_region":
+                # add_manual_region creates a new region, so we need immediate mutation
+                review_session.add_manual_region(
+                    x=int(st.session_state.get('manual_x_val', 0)), 
+                    y=int(st.session_state.get('manual_y_val', 0)), 
+                    w=int(st.session_state.get('manual_w_val', 100)), 
+                    h=int(st.session_state.get('manual_h_val', 50))
+                )
+                if not review_session.review_started:
+                    review_session.start_review()
+                st.session_state.executed_action = "add_manual_region"
+                
+            elif _action == "clear_manual":
+                review_session.draft_clear_manual_regions()
+                st.session_state.executed_action = "clear_manual"
+                
+            elif _action == "accept_review":
+                # Accept commits draft and seals the session
+                review_session.commit_draft()
+                review_session.accept()
+                st.session_state.executed_action = "accept_review"
+                
+            elif _action.startswith("toggle_"):
+                rid = _action.split("_", 1)[1]  # region_id is a string like "r-abc12345"
+                review_session.draft_toggle_region(rid)
+                st.session_state.executed_action = f"toggle_{rid}"
+                
+            elif _action.startswith("delete_"):
+                rid = _action.split("_", 1)[1]  # region_id is a string
+                review_session.draft_delete_region(rid)
+                st.session_state.executed_action = f"delete_{rid}"
+
+
         # Guard: Only show review panel if review session is initialized
         if review_session is None:
             st.info("📋 Review session initializing... Please wait for file analysis to complete.")
@@ -3027,13 +3192,22 @@ if st.session_state.get('uploaded_dicom_files'):
                     
                     # ═══════════════════════════════════════════════════════════════
                     # PDF EXCLUSION CONTROLS (Phase 2: User-Driven, Logged)
-                    # Allows operator to exclude Encapsulated PDFs from export
+                    # Phase 13: Always render (disabled when sealed) to stabilize widget tree
                     # ═══════════════════════════════════════════════════════════════
                     pdf_findings = review_session.get_pdf_findings()
-                    if pdf_findings and not review_session.is_sealed():
+                    if pdf_findings:
                         st.markdown("---")
                         st.markdown("**📄 Encapsulated PDF Management:**")
-                        st.caption("Exclude PDFs from export. This action is logged for audit purposes.")
+                        
+                        _pdf_sealed = review_session.is_sealed()
+                        if _pdf_sealed:
+                            excluded_count = len(review_session.get_excluded_pdf_uids())
+                            if excluded_count > 0:
+                                st.success(f"✅ **{excluded_count}** Encapsulated PDF{'s' if excluded_count > 1 else ''} excluded from export (locked).")
+                            else:
+                                st.caption("No PDFs excluded from export (locked).")
+                        else:
+                            st.caption("Exclude PDFs from export. This action is logged for audit purposes.")
                         
                         for idx, pdf in enumerate(pdf_findings):
                             # Create unique key for checkbox
@@ -3041,76 +3215,98 @@ if st.session_state.get('uploaded_dicom_files'):
                             
                             # Display checkbox with current state
                             exclude_label = f"Exclude PDF (SOP: ...{pdf.sop_instance_uid[-12:]})"
-                            current_excluded = pdf.excluded
                             
-                            new_excluded = st.checkbox(
+                            # Store pdf info in session for callback access (only if not present)
+                            pdf_info_key = f"_pdf_info_{checkbox_key}"
+                            if pdf_info_key not in st.session_state:
+                                st.session_state[pdf_info_key] = {
+                                    'sop_uid': pdf.sop_instance_uid,
+                                    'series_uid': pdf.series_instance_uid,
+                                    'modality': pdf.modality
+                                }
+                            
+                            def make_pdf_callback(ck, info_key):
+                                """Factory to create callback with proper closure."""
+                                def on_pdf_exclude_change():
+                                    st.session_state._debug_last_callback = 'pdf_exclude'
+                                    # Guard: no-op if sealed
+                                    if review_session.is_sealed():
+                                        return
+                                    info = st.session_state[info_key]
+                                    new_val = st.session_state[ck]
+                                    review_session.set_pdf_excluded(info['sop_uid'], new_val)
+                                    
+                                    # Audit log the decision
+                                    try:
+                                        from audit_manager import AuditLogger
+                                        audit_logger = AuditLogger()
+                                        audit_logger.log_scrub_event(
+                                            operator_id=st.session_state.get('operator_id', 'OPERATOR'),
+                                            original_filename=f"PDF_{info['sop_uid']}",
+                                            scrub_uuid=audit_logger.generate_scrub_uuid(),
+                                            reason_code="EXCLUDE_ENCAPSULATED_PDF" if new_val else "INCLUDE_ENCAPSULATED_PDF",
+                                            output_filename=None,
+                                            modality=info['modality'] or "DOC",
+                                            success=True
+                                        )
+                                    except Exception:
+                                        pass  # Audit logging failure is non-fatal
+                                return on_pdf_exclude_change
+                            
+                            # Initialize checkbox state if not present
+                            if checkbox_key not in st.session_state:
+                                st.session_state[checkbox_key] = pdf.excluded
+                            
+                            # Always render checkbox, disable when sealed
+                            st.checkbox(
                                 exclude_label,
-                                value=current_excluded,
                                 key=checkbox_key,
-                                help=f"Series: {pdf.series_instance_uid[:20]}... | Modality: {pdf.modality or 'Unknown'}"
+                                on_change=make_pdf_callback(checkbox_key, pdf_info_key),
+                                help=f"Series: {pdf.series_instance_uid[:20]}... | Modality: {pdf.modality or 'Unknown'}",
+                                disabled=_pdf_sealed
                             )
-                            
-                            # Handle state change with audit logging
-                            if new_excluded != current_excluded:
-                                review_session.set_pdf_excluded(pdf.sop_instance_uid, new_excluded)
-                                
-                                # Audit log the decision
-                                try:
-                                    from audit_manager import AuditLogger
-                                    audit_logger = AuditLogger()
-                                    audit_logger.log_scrub_event(
-                                        operator_id=st.session_state.get('operator_id', 'OPERATOR'),
-                                        original_filename=f"PDF_{pdf.sop_instance_uid}",
-                                        scrub_uuid=audit_logger.generate_scrub_uuid(),
-                                        reason_code="EXCLUDE_ENCAPSULATED_PDF" if new_excluded else "INCLUDE_ENCAPSULATED_PDF",
-                                        output_filename=None,
-                                        modality=pdf.modality or "DOC",
-                                        success=True
-                                    )
-                                except Exception:
-                                    pass  # Audit logging failure is non-fatal
-                                
-                                st.rerun()
                         
-                        # Show exclusion summary
-                        excluded_count = len(review_session.get_excluded_pdf_uids())
-                        if excluded_count > 0:
-                            st.info(f"📋 **{excluded_count}** PDF{'s' if excluded_count > 1 else ''} marked for exclusion from export.")
-                    
-                    elif pdf_findings and review_session.is_sealed():
-                        # Show read-only status after seal
-                        excluded_count = len(review_session.get_excluded_pdf_uids())
-                        if excluded_count > 0:
-                            st.markdown("---")
-                            st.success(f"✅ **{excluded_count}** Encapsulated PDF{'s' if excluded_count > 1 else ''} excluded from export (locked).")
+                        # Show exclusion summary (when not sealed)
+                        if not _pdf_sealed:
+                            excluded_count = len(review_session.get_excluded_pdf_uids())
+                            if excluded_count > 0:
+                                st.info(f"📋 **{excluded_count}** PDF{'s' if excluded_count > 1 else ''} marked for exclusion from export.")
+
                 
                 # ═══════════════════════════════════════════════════════════════════
-                # BULK ACTIONS (PR 4)
+                # BULK ACTIONS (PR 4) - Using callbacks to avoid rerun loops
+                # Phase 13: Always render (disabled when sealed) to stabilize widget tree
                 # ═══════════════════════════════════════════════════════════════════
-                if not review_session.is_sealed():
-                    st.markdown("**Bulk Actions:**")
-                    bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
-                    
-                    with bulk_col1:
-                        if st.button("🔴 Mask All Detected", key="bulk_mask_all", use_container_width=True):
-                            review_session.mask_all_detected()
-                            if not review_session.review_started:
-                                review_session.start_review()
-                            st.rerun()
-                    
-                    with bulk_col2:
-                        if st.button("🟢 Keep All", key="bulk_unmask_all", use_container_width=True):
-                            review_session.unmask_all()
-                            if not review_session.review_started:
-                                review_session.start_review()
-                            st.rerun()
-                    
-                    with bulk_col3:
-                        if st.button("🔄 Reset to Defaults", key="bulk_reset", use_container_width=True):
-                            review_session.reset_to_defaults()
-                            st.rerun()
-                    
-                    st.markdown("---")
+                _is_sealed = review_session.is_sealed()
+                
+                st.markdown("**Bulk Actions:**")
+                bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
+                
+                def on_mask_all_click():
+                    st.session_state.pending_action = "bulk_mask_all"
+                
+                def on_unmask_all_click():
+                    st.session_state.pending_action = "bulk_unmask_all"
+                
+                def on_reset_click():
+                    st.session_state.pending_action = "bulk_reset"
+                
+                with bulk_col1:
+                    st.button("🔴 Mask All Detected", key="btn_bulk_mask_all", 
+                              use_container_width=True, on_click=on_mask_all_click,
+                              disabled=_is_sealed)
+                
+                with bulk_col2:
+                    st.button("🟢 Keep All", key="btn_bulk_unmask_all", 
+                              use_container_width=True, on_click=on_unmask_all_click,
+                              disabled=_is_sealed)
+                
+                with bulk_col3:
+                    st.button("🔄 Reset to Defaults", key="btn_bulk_reset", 
+                              use_container_width=True, on_click=on_reset_click,
+                              disabled=_is_sealed)
+                
+                st.markdown("---")
                 
                 # ═══════════════════════════════════════════════════════════════════
                 # REGION LIST WITH TOGGLE BUTTONS (PR 4)
@@ -3131,9 +3327,14 @@ if st.session_state.get('uploaded_dicom_files'):
                 if regions:
                     st.markdown("**Region List:**")
                     
+                    # Phase 13: Add staging indicator if draft changes exist
+                    if review_session.has_draft_changes():
+                        st.caption("💡 *Changes are staged until you click Accept & Continue.*")
+                    
                     for idx, region in enumerate(regions):
                         source_icon = "🔍 OCR" if region.source == RegionSource.OCR else "✏️ Manual"
-                        current_action = region.get_effective_action()
+                        # Phase 13: Use draft-aware effective action for UI display
+                        current_action = review_session.get_effective_action_with_draft(region.region_id)
                         action_icon = "🔴 MASK" if current_action == RegionAction.MASK else "🟢 KEEP"
                         
                         # Phase 5A: Generate presentation elements (no state mutation)
@@ -3156,17 +3357,19 @@ if st.session_state.get('uploaded_dicom_files'):
                             st.markdown(f"`({region.x}, {region.y}) {region.w}×{region.h}`")
                         
                         with row_col4:
-                            if review_session.is_sealed():
-                                # Show static badge if sealed
-                                st.markdown(action_icon)
-                            else:
-                                # Toggle button
-                                toggle_label = "🟢 Keep" if current_action == RegionAction.MASK else "🔴 Mask"
-                                if st.button(toggle_label, key=f"toggle_{region.region_id}", use_container_width=True):
-                                    review_session.toggle_region(region.region_id)
-                                    if not review_session.review_started:
-                                        review_session.start_review()
-                                    st.rerun()
+                            # Phase 13: Always render button (disabled when sealed) to stabilize widget tree
+                            toggle_label = "🟢 Keep" if current_action == RegionAction.MASK else "🔴 Mask"
+                            
+                            def make_toggle_callback(rid):
+                                def on_toggle():
+                                    st.session_state.pending_action = f"toggle_{rid}"
+
+                                return on_toggle
+                            
+                            st.button(toggle_label, key=f"btn_toggle_{region.region_id}", 
+                                      use_container_width=True, on_click=make_toggle_callback(region.region_id),
+                                      disabled=_is_sealed)
+
                         
                         # ═══════════════════════════════════════════════════════════════
                         # PHASE 5A: Detection Strength Badge + Zone Label + Uncertainty
@@ -3183,11 +3386,16 @@ if st.session_state.get('uploaded_dicom_files'):
                             """
                             st.markdown(phase5a_html, unsafe_allow_html=True)
                         
-                        # Delete button for manual regions (on separate row to avoid crowding)
-                        if region.can_delete() and not review_session.is_sealed():
-                            if st.button(f"🗑️ Delete Region #{idx + 1}", key=f"delete_{region.region_id}"):
-                                review_session.delete_region(region.region_id)
-                                st.rerun()
+                        # Delete button for manual regions - always render, disable when sealed
+                        if region.can_delete():
+                            def make_delete_callback(rid):
+                                def on_delete():
+                                    st.session_state.pending_action = f"delete_{rid}"
+                                return on_delete
+                            
+                            st.button(f"🗑️ Delete Region #{idx + 1}", key=f"btn_delete_{region.region_id}",
+                                      on_click=make_delete_callback(region.region_id),
+                                      disabled=_is_sealed)
                         
                         # Visual separator between regions
                         st.markdown("<div style='border-bottom: 1px solid #30363d; margin: 4px 0;'></div>", unsafe_allow_html=True)
@@ -3195,65 +3403,63 @@ if st.session_state.get('uploaded_dicom_files'):
                     st.markdown("*No regions detected yet. Regions will appear after OCR detection runs.*")
                 
                 # ═══════════════════════════════════════════════════════════════════
-                # ADD MANUAL REGION (PR 4)
-                # ═══════════════════════════════════════════════════════════════════
-                if not review_session.is_sealed():
-                    st.markdown("---")
-                    st.markdown("**Add Manual Region:**")
-                    st.caption("Draw a rectangle by specifying coordinates (pixels)")
-                    
-                    manual_col1, manual_col2, manual_col3, manual_col4 = st.columns(4)
-                    with manual_col1:
-                        manual_x = st.number_input("X", min_value=0, max_value=2000, value=0, key="manual_x")
-                    with manual_col2:
-                        manual_y = st.number_input("Y", min_value=0, max_value=2000, value=0, key="manual_y")
-                    with manual_col3:
-                        manual_w = st.number_input("Width", min_value=1, max_value=2000, value=100, key="manual_w")
-                    with manual_col4:
-                        manual_h = st.number_input("Height", min_value=1, max_value=2000, value=50, key="manual_h")
-                    
-                    if st.button("➕ Add Manual Region", key="add_manual_region"):
-                        review_session.add_manual_region(
-                            x=int(manual_x), 
-                            y=int(manual_y), 
-                            w=int(manual_w), 
-                            h=int(manual_h)
-                        )
-                        if not review_session.review_started:
-                            review_session.start_review()
-                        st.rerun()
-                    
-                    # Clear all manual regions
-                    if summary['manual_regions'] > 0:
-                        if st.button("🗑️ Clear All Manual Regions", key="clear_manual"):
-                            review_session.clear_manual_regions()
-                            st.rerun()
-                
-                # ═══════════════════════════════════════════════════════════════════
-                # ACCEPT & CONTINUE (PR 5 - Accept Gating)
+                # ADD MANUAL REGION (PR 4) - Always render, disable when sealed
                 # ═══════════════════════════════════════════════════════════════════
                 st.markdown("---")
-                if review_session.is_sealed():
+                st.markdown("**Add Manual Region:**")
+                st.caption("Draw a rectangle by specifying coordinates (pixels)")
+                
+                manual_col1, manual_col2, manual_col3, manual_col4 = st.columns(4)
+                with manual_col1:
+                    manual_x = st.number_input("X", min_value=0, max_value=2000, value=0, key="manual_x_val", disabled=_is_sealed)
+                with manual_col2:
+                    manual_y = st.number_input("Y", min_value=0, max_value=2000, value=0, key="manual_y_val", disabled=_is_sealed)
+                with manual_col3:
+                    manual_w = st.number_input("Width", min_value=1, max_value=2000, value=100, key="manual_w_val", disabled=_is_sealed)
+                with manual_col4:
+                    manual_h = st.number_input("Height", min_value=1, max_value=2000, value=50, key="manual_h_val", disabled=_is_sealed)
+                
+                def on_add_manual_click():
+                    st.session_state.pending_action = "add_manual_region"
+                
+                st.button("➕ Add Manual Region", key="btn_add_manual_region", on_click=on_add_manual_click, disabled=_is_sealed)
+                
+                # Clear all manual regions - always render
+                def on_clear_manual_click():
+                    st.session_state.pending_action = "clear_manual"
+                
+                _has_manual = summary['manual_regions'] > 0
+                st.button("🗑️ Clear All Manual Regions", key="btn_clear_manual", on_click=on_clear_manual_click,
+                          disabled=(_is_sealed or not _has_manual))
+                
+                # ═══════════════════════════════════════════════════════════════════
+                # ACCEPT & CONTINUE (PR 5 - Accept Gating) - Always render
+                # ═══════════════════════════════════════════════════════════════════
+                st.markdown("---")
+                if _is_sealed:
                     st.success("✅ Review accepted. Regions locked — ready for export.")
-                else:
-                    # Show modification status
-                    modified_count = len([r for r in regions if r.is_modified()])
-                    if modified_count > 0:
-                        st.info(f"📝 {modified_count} region(s) modified from defaults")
-                    
-                    # Accept button - only shows when review has started
-                    if review_session.can_accept():
-                        st.markdown("---")
-                        st.markdown("**Ready to proceed?**")
-                        st.caption("⚠️ Once accepted, region decisions are locked and cannot be changed. Original pixel data is NOT retained.")
-                        
-                        if st.button("✅ Accept & Continue", key="accept_review", type="primary", use_container_width=True):
-                            review_session.accept()
-                            st.success("✅ Review accepted! You may now proceed to export.")
-                            st.rerun()
-                    else:
-                        # Review not started yet - prompt user to interact
-                        st.caption("💡 *Toggle regions above or add manual regions to begin review.*")
+                
+                # Show modification status
+                modified_count = len([r for r in regions if r.is_modified()])
+                if modified_count > 0 and not _is_sealed:
+                    st.info(f"📝 {modified_count} region(s) modified from defaults")
+                
+                # Accept button - always render for stable widget tree
+                _can_accept = review_session.can_accept() and not _is_sealed
+                
+                st.markdown("**Ready to proceed?**")
+                st.caption("⚠️ Once accepted, region decisions are locked and cannot be changed. Original pixel data is NOT retained.")
+                
+                def on_accept_click():
+                    st.session_state.pending_action = "accept_review"
+                
+                st.button("✅ Accept & Continue", key="btn_accept_review", type="primary", 
+                          use_container_width=True, on_click=on_accept_click,
+                          disabled=(not _can_accept))
+                
+                if not review_session.review_started and not _is_sealed:
+                    st.caption("💡 *Toggle regions above or add manual regions to begin review.*")
+
     
     # ═══════════════════════════════════════════════════════════════════════════════
     # PHASE 6: SERIES BROWSER + STACK NAVIGATION
@@ -3287,18 +3493,28 @@ if st.session_state.get('uploaded_dicom_files'):
             if summary['hidden_series'] > 0:
                 st.caption(f"Showing {summary['filtered_series']} of {summary['total_series']} series ({summary['hidden_series']} non-image series hidden)")
             
-            # Filter toggle
-            show_docs = st.checkbox(
-                "Show non-image objects (OT/SC)",
-                value=viewer_state.show_non_image_objects,
-                key="viewer_show_non_image",
-                help="Include Secondary Capture, OT, and other non-image modalities in the series list"
-            )
-            if show_docs != viewer_state.show_non_image_objects:
-                viewer_state.show_non_image_objects = show_docs
+            # Filter toggle - use session state only to prevent rerun loops
+            checkbox_key = "viewer_show_non_image"
+            
+            # Only initialize if not present - never overwrite
+            if checkbox_key not in st.session_state:
+                st.session_state[checkbox_key] = viewer_state.show_non_image_objects
+            
+            def on_filter_change():
+                """Callback when user toggles the filter."""
+                st.session_state._debug_last_callback = 'filter_change'
+                viewer_state.show_non_image_objects = st.session_state[checkbox_key]
                 viewer_state.selected_series_idx = 0
                 viewer_state.selected_instance_idx = 0
-                st.rerun()
+            
+            # Don't pass value= when using key= to avoid mismatch reruns
+            st.checkbox(
+                "Show non-image objects (OT/SC)",
+                key=checkbox_key,
+                on_change=on_filter_change,
+                help="Include Secondary Capture, OT, and other non-image modalities in the series list"
+            )
+            # No explicit st.rerun() needed - on_change handles it
             
             # Two-column layout: series list | viewport
             col_browser, col_viewport = st.columns([1, 3])
@@ -3307,6 +3523,16 @@ if st.session_state.get('uploaded_dicom_files'):
             
             with col_browser:
                 st.markdown("**Series:**")
+                
+                def make_series_callback(series_idx):
+                    """Factory to create callback with proper closure for series index."""
+                    def on_series_click():
+                        viewer_state.select_series(series_idx)
+                        # Reset slider to 1 for new series
+                        if "viewer_stack_slider" in st.session_state:
+                            st.session_state["viewer_stack_slider"] = 1
+                    return on_series_click
+                
                 for idx, series in enumerate(filtered_series):
                     is_selected = (idx == viewer_state.selected_series_idx)
                     
@@ -3314,9 +3540,8 @@ if st.session_state.get('uploaded_dicom_files'):
                     if is_selected:
                         st.markdown(f"▶ **{series.display_label}**")
                     else:
-                        if st.button(series.display_label, key=f"series_btn_{idx}", use_container_width=True):
-                            viewer_state.select_series(idx)
-                            st.rerun()
+                        st.button(series.display_label, key=f"series_btn_{idx}", 
+                                  use_container_width=True, on_click=make_series_callback(idx))
                 
                 # Ordering provenance (audit-friendly transparency)
                 if viewer_state.selected_series:
@@ -3337,28 +3562,74 @@ if st.session_state.get('uploaded_dicom_files'):
                     # Navigation controls
                     nav_col1, nav_col2, nav_col3 = st.columns([1, 8, 1])
                     
+                    # Navigation callbacks
+                    def on_prev_click():
+                        """Callback for previous button."""
+                        viewer_state.prev_instance()
+                        # Update slider state to match
+                        if "viewer_stack_slider" in st.session_state:
+                            st.session_state["viewer_stack_slider"] = viewer_state.selected_instance_idx + 1
+                    
+                    def on_next_click():
+                        """Callback for next button."""
+                        viewer_state.next_instance()
+                        # Update slider state to match
+                        if "viewer_stack_slider" in st.session_state:
+                            st.session_state["viewer_stack_slider"] = viewer_state.selected_instance_idx + 1
+                    
                     with nav_col1:
-                        if st.button("◀", key="viewer_prev_img", disabled=(current <= 1), use_container_width=True, help="Previous image"):
-                            viewer_state.prev_instance()
-                            st.rerun()
+                        st.button("◀", key="viewer_prev_img", disabled=(current <= 1), 
+                                  use_container_width=True, help="Previous image", on_click=on_prev_click)
                     
                     with nav_col2:
-                        new_pos = st.slider(
+                        # PHASE 14: Fix rerun loop - avoid value/key conflict
+                        # When both value= and key= are specified, Streamlit can detect
+                        # a mismatch and trigger continuous reruns.
+                        # Solution: Initialize session state once, then only use key=
+                        slider_key = "viewer_stack_slider"
+                        
+                        # Initialize or clamp slider value to valid range for current series
+                        # CRITICAL: Track if we're clamping to avoid triggering on_change
+                        _needs_clamp = False
+                        if slider_key not in st.session_state:
+                            st.session_state[slider_key] = current
+                        else:
+                            # Clamp to valid range if series changed - BUT mark as internal change
+                            if st.session_state[slider_key] > total:
+                                st.session_state[slider_key] = total
+                                _needs_clamp = True
+                            if st.session_state[slider_key] < 1:
+                                st.session_state[slider_key] = 1
+                                _needs_clamp = True
+                        
+                        # Flag to track internal slider adjustments vs user input
+                        if _needs_clamp:
+                            st.session_state['_slider_internal_adjust'] = True
+                        
+                        def on_slider_change():
+                            """Callback when user interacts with slider."""
+                            st.session_state._debug_last_callback = 'slider_change'
+                            # Skip if this was an internal adjustment
+                            if st.session_state.get('_slider_internal_adjust'):
+                                st.session_state['_slider_internal_adjust'] = False
+                                return
+                            new_val = st.session_state[slider_key]
+                            viewer_state.goto_instance(new_val - 1)
+                        
+                        # Don't pass value= when using key= to avoid mismatch reruns
+                        st.slider(
                             "Navigate",
                             min_value=1,
                             max_value=total,
-                            value=current,
                             label_visibility="collapsed",
-                            key="viewer_stack_slider"
+                            key=slider_key,
+                            on_change=on_slider_change
                         )
-                        if new_pos != current:
-                            viewer_state.goto_instance(new_pos - 1)
-                            st.rerun()
+                        # No explicit st.rerun() needed - on_change handles it
                     
                     with nav_col3:
-                        if st.button("▶", key="viewer_next_img", disabled=(current >= total), use_container_width=True, help="Next image"):
-                            viewer_state.next_instance()
-                            st.rerun()
+                        st.button("▶", key="viewer_next_img", disabled=(current >= total), 
+                                  use_container_width=True, help="Next image", on_click=on_next_click)
                     
                     # ═══════════════════════════════════════════════════════════════
                     # PHASE 12: OT/SC Non-Image Placeholder Handling
@@ -3635,8 +3906,27 @@ if st.session_state.get('uploaded_dicom_files'):
         st.info(f"📋 Detected {len(bucket_safe)} safe modality files (CT/MR/etc.). Standard Tag Anonymization will be applied - no pixel masking needed.")
         manual_box = None
     else:
-        # No processable files
-        st.warning("No processable files found in selection.")
+        # No processable files in imaging buckets
+        # Check if we have documents that are excluded by selection scope
+        selection_scope = st.session_state.get('selection_scope')
+        docs_excluded_by_scope = (
+            len(bucket_docs) > 0 and 
+            selection_scope is not None and 
+            not selection_scope.include_documents
+        )
+        
+        if docs_excluded_by_scope:
+            # ═══════════════════════════════════════════════════════════════════════
+            # PHASE 13: Clear UX hint when only documents are present
+            # ═══════════════════════════════════════════════════════════════════════
+            st.info(
+                f"📄 **Only associated documents detected** ({len(bucket_docs)} file(s))\n\n"
+                f"The selected files are classified as associated documents (Secondary Capture, worksheets, or reports). "
+                f"These are excluded by default to ensure FOI and governance safety.\n\n"
+                f"**To process these files:** Enable \"Include Associated Documents\" in the **Selection Scope** section above."
+            )
+        else:
+            st.warning("No processable files found in selection.")
         manual_box = None
     
     # Determine final file list - ONLY use files that are checked in the manifest

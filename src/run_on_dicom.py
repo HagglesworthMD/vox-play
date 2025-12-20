@@ -840,12 +840,13 @@ def process_dicom(  # pragma: no cover
         # Better strategy: Wrap the entire pixel pipeline in an else block or return early if I can refactor.
         # Given the linear structure, let's use a flag.
         pixel_processing_enabled = False
+        all_masks = []  # Initialize to empty when pixel processing is skipped
     else:
         pixel_processing_enabled = True
 
     # Decompress pixels (required for OpenCV editing)
     # Note: pydicom usually converts YBR* to RGB automatically on decompress
-    if locals().get("pixel_processing_enabled"):
+    if pixel_processing_enabled:
         print("Decompressing pixel data...")
         try:
             ds.decompress()
@@ -854,7 +855,7 @@ def process_dicom(  # pragma: no cover
 
 
     # Get pixel array
-    if locals().get("pixel_processing_enabled"):
+    if pixel_processing_enabled:
         try:
             arr = ds.pixel_array.copy()  # Copy to ensure writability
             # EVIDENCE: Compute source pixel hash BEFORE any modification (Model B backbone)
@@ -1289,17 +1290,19 @@ def process_dicom(  # pragma: no cover
     # Full metadata anonymization (PHI removal + UID remapping)
     anonymize_metadata(ds, new_name_text, research_context=research_context, clinical_context=clinical_context)
 
-    # Update frame count if multi-frame
-    if arr_out.ndim == 4:
-        ds.NumberOfFrames = arr_out.shape[0]
-    elif arr_out.ndim == 3 and arr.shape[0] > 1:
-        # Grayscale multi-frame: (Frames, H, W)
-        ds.NumberOfFrames = arr_out.shape[0]
-    elif hasattr(ds, 'NumberOfFrames'):
-        del ds.NumberOfFrames
+    # Update frame count if multi-frame (only when pixels were processed)
+    if pixel_processing_enabled and arr_out is not None:
+        if arr_out.ndim == 4:
+            ds.NumberOfFrames = arr_out.shape[0]
+        elif arr_out.ndim == 3 and arr.shape[0] > 1:
+            # Grayscale multi-frame: (Frames, H, W)
+            ds.NumberOfFrames = arr_out.shape[0]
+        elif hasattr(ds, 'NumberOfFrames'):
+            del ds.NumberOfFrames
+    # When pixel_processing_enabled is False, preserve original NumberOfFrames
 
     # Update pixel data (ONLY if we processed it)
-    if locals().get("pixel_processing_enabled") and arr_out is not None:
+    if pixel_processing_enabled and arr_out is not None:
         ds.PixelData = arr_out.tobytes()
 
         # Reset compression to Explicit VR Little Endian (uncompressed) only if we changed pixels
@@ -1360,7 +1363,7 @@ def process_dicom(  # pragma: no cover
         except Exception as le:
             print(f"[EVIDENCE] Warning: Could not log linkage/decision: {le}")
 
-    if locals().get("pixel_processing_enabled"):
+    if pixel_processing_enabled:
         if 'arr' in locals():
             del arr
         if 'arr_original_depth' in locals():

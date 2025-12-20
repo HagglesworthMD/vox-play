@@ -97,6 +97,7 @@ if search_term in src_content:
 
 import hashlib
 import json
+import gc
 import os
 import re
 import sys
@@ -2042,6 +2043,17 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     # ═══════════════════════════════════════════════════════════════════════════════
     if st.session_state.get('processing_stats'):
         stats = st.session_state.processing_stats
+
+        failure_count = stats.get('masking_failure_count', 0)
+        failure_messages = st.session_state.get('masking_failures', [])
+        if failure_count:
+            st.warning(
+                f"⚠️ Masking could not be applied to {failure_count} file(s). The remaining instances were processed normally."
+            )
+            if failure_messages:
+                with st.expander("View masking issues"):
+                    for msg in failure_messages:
+                        st.write(f"- {msg}")
         
         # Format values for display
         duration = stats.get('duration_seconds', 0)
@@ -4290,7 +4302,10 @@ if st.session_state.get('uploaded_dicom_files'):
                     for f in all_files
                 )
                 total_output_bytes = 0
-                
+                masking_failure_count = 0
+                failure_messages = []
+                st.session_state.masking_failures = []
+
                 # Progress bar for multi-file processing
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -4312,10 +4327,11 @@ if st.session_state.get('uploaded_dicom_files'):
                     # File path defaults (will be overwritten)
                     input_path = None
                     output_path = None
-                    
+
                     # Metadata defaults - read from file or use safe fallbacks
                     original_name = "UNKNOWN"
                     verification_ds = None
+                    sop_uid_for_log = "UNKNOWN"
                     
                     # --- UNIVERSAL LOGGER SETUP (Fixes NameError for CT/MR/XR) ---
                     # Ensure local variable 'audit_logger' exists for this specific file iteration
@@ -4356,6 +4372,8 @@ if st.session_state.get('uploaded_dicom_files'):
                         # For FOI mode, we need the ORIGINAL StudyDate and AccessionNumber
                         # ═══════════════════════════════════════════════════════════════
                         original_ds = pydicom.dcmread(input_path, stop_before_pixels=True, force=True)
+
+                        sop_uid_for_log = str(getattr(original_ds, 'SOPInstanceUID', 'UNKNOWN'))
                         
                         # Extract StudyDate (0008,0020) - format nicely if possible
                         orig_study_date = "Unknown"
@@ -4467,16 +4485,28 @@ if st.session_state.get('uploaded_dicom_files'):
                                   f"pixel_invariant={audit_dict.get('pixel_invariant', 'N/A')}")
                         else:
                             # Full pixel pipeline - ONLY when masking is actually requested
-                            success = process_dicom(
-                                input_path=input_path,
-                                output_path=output_path,
-                                old_name_text=original_name,
-                                new_name_text=new_patient_name.strip(),
-                                manual_box=manual_box if apply_mask else None,
-                                research_context=research_context,
-                                clinical_context=repair_context
-                            )
-                        
+                            if apply_mask and orig_modality == "US":
+                                # US series processed sequentially to prevent memory exhaustion
+                                success = process_dicom(
+                                    input_path=input_path,
+                                    output_path=output_path,
+                                    old_name_text=original_name,
+                                    new_name_text=new_patient_name.strip(),
+                                    manual_box=manual_box,
+                                    research_context=research_context,
+                                    clinical_context=repair_context
+                                )
+                            else:
+                                success = process_dicom(
+                                    input_path=input_path,
+                                    output_path=output_path,
+                                    old_name_text=original_name,
+                                    new_name_text=new_patient_name.strip(),
+                                    manual_box=manual_box if apply_mask else None,
+                                    research_context=research_context,
+                                    clinical_context=repair_context
+                                )
+
                         if success:
                             # VERIFICATION STEP: Read the file we just wrote to disk
                             # This guarantees the log matches the output file 100%
@@ -4645,17 +4675,61 @@ if st.session_state.get('uploaded_dicom_files'):
                         if 'compliance_info' in dir() and compliance_info.get('log'):
                             audit_log += f"\n\n--- Compliance Engine Log ---\n" + "\n".join(compliance_info['log'])
                         
-                        combined_audit_logs.append(audit_log)
-                        
-                        # Clean up temp files
-                        try:
-                            os.unlink(input_path)
-                            os.unlink(output_path)
-                        except:
-                            pass
-                            
+                        if audit_log:
+                            combined_audit_logs.append(audit_log)
+
+                        if not success:
+                            if apply_mask:
+                                masking_failure_count += 1
+                                logger.warning(
+                                    "Masking skipped for %s (SOP: %s) due to processing failure",
+                                    file_buffer.name,
+                                    sop_uid_for_log,
+                                )
+                                failure_messages.append(
+                                    f"Masking skipped for {file_buffer.name} (SOP: {sop_uid_for_log}) due to processing failure"
+                                )
+                            else:
+                                logger.warning(
+                                    "Processing failed for %s (SOP: %s); mask not requested",
+                                    file_buffer.name,
+                                    sop_uid_for_log,
+                                )
+                            continue
+
                     except Exception as e:
-                        st.error(f"Could not process {file_buffer.name}. This file will be skipped.")
+                        if apply_mask:
+                            masking_failure_count += 1
+                        logger.warning(
+                            "Could not process %s (SOP: %s): %s",
+                            file_buffer.name,
+                            sop_uid_for_log,
+                            e,
+                        )
+                        if apply_mask:
+                            failure_messages.append(
+                                f"Could not process {file_buffer.name} (SOP: {sop_uid_for_log}): {e}"
+                            )
+                    finally:
+                        # Explicit cleanup to reduce per-file peak memory
+                        if input_path:
+                            try:
+                                os.unlink(input_path)
+                            except Exception:
+                                pass
+
+                        if output_path:
+                            try:
+                                os.unlink(output_path)
+                            except Exception:
+                                pass
+
+                        if 'original_ds' in locals():
+                            del original_ds
+                        if 'verification_ds' in locals():
+                            del verification_ds
+
+                        gc.collect()
                 
                 # Complete progress
                 progress_bar.progress(1.0)
@@ -4671,6 +4745,13 @@ if st.session_state.get('uploaded_dicom_files'):
                     <div class="voxel-progress-subtext">All {len(all_files)} files processed successfully</div>
                 </div>
                 """, unsafe_allow_html=True)
+
+                if failure_messages:
+                    st.warning(
+                        "⚠️ Some files could not be masked. See Processing Diagnostics panel."
+                    )
+
+                st.session_state.masking_failures = failure_messages
                 
                 # Store results in session state
                 if processed_files:
@@ -4711,7 +4792,8 @@ if st.session_state.get('uploaded_dicom_files'):
                         'files_per_second': len(processed_files) / processing_duration if processing_duration > 0 else 0,
                         'mb_per_second': (total_input_bytes / (1024 * 1024)) / processing_duration if processing_duration > 0 else 0,
                         'profile': pacs_operation_mode,
-                        'timestamp': datetime.now().isoformat()
+                        'timestamp': datetime.now().isoformat(),
+                        'masking_failure_count': masking_failure_count,
                     }
                     
                     # Create ZIP file for bulk download WITH FOLDER STRUCTURE

@@ -141,7 +141,7 @@ generate_audit_receipt = _audit_module.generate_audit_receipt
 from research_mode.anonymizer import DicomAnonymizer, AnonymizationConfig
 from interactive_canvas import draw_canvas_with_image
 from compliance_engine import DicomComplianceManager
-from utils import should_render_pixels  # Memory guard
+from utils import should_render_pixels, evaluate_us_mask_memory_guard  # Memory guard
 from nifti_handler import NiftiConverter, convert_dataset_to_nifti, generate_nifti_readme, generate_fallback_warning_file, check_dicom2nifti_available
 from foi_engine import FOIEngine, process_foi_request, exclude_scanned_documents
 from pdf_reporter import PDFReporter, create_report
@@ -160,6 +160,7 @@ from run_status import update_run_status  # Phase 8: Fail-safe completion
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOWNLOADS_ROOT = Path(BASE_DIR) / "downloads"
+US_PIXEL_MASK_MAX_MB = 768
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 12: RUN-SCOPED VIEWER CACHE
@@ -4486,6 +4487,27 @@ if st.session_state.get('uploaded_dicom_files'):
                         else:
                             # Full pixel pipeline - ONLY when masking is actually requested
                             if apply_mask and orig_modality == "US":
+                                should_skip, estimated_mb = evaluate_us_mask_memory_guard(
+                                    original_ds, US_PIXEL_MASK_MAX_MB
+                                )
+                                if should_skip:
+                                    masking_failure_count += 1
+                                    skip_message = (
+                                        f"Masking skipped for {file_buffer.name} (SOP: {sop_uid_for_log}) due to memory safety guard "
+                                        f"(estimated {estimated_mb:.1f} MB)"
+                                    )
+                                    logger.warning(skip_message)
+                                    failure_messages.append(skip_message)
+                                    audit_log = (
+                                        f"Pixel masking skipped due to memory safety guard (estimated {estimated_mb:.1f} MB) for {file_buffer.name} "
+                                        f"(SOP: {sop_uid_for_log})"
+                                    )
+                                    compliance_log_entry = (
+                                        f"{compliance_log_entry} | Pixel masking skipped due to memory safety guard (estimated {estimated_mb:.1f} MB)"
+                                    )
+                                    combined_audit_logs.append(audit_log)
+                                    continue
+
                                 # US series processed sequentially to prevent memory exhaustion
                                 success = process_dicom(
                                     input_path=input_path,

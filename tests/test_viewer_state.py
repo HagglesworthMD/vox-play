@@ -33,6 +33,7 @@ from viewer_state import (
     ViewerOrderingMethod,
     SeriesOrderingMethod,
     build_viewer_state,
+    MAX_US_VIEWER_INSTANCES,
     parse_ordered_series_manifest,
     parse_baseline_manifest_series_order,
     get_instance_ordering_label,
@@ -699,6 +700,56 @@ class TestProvenanceLabels:
         icon, desc = get_series_ordering_label(SeriesOrderingMethod.BASELINE_MANIFEST)
         assert icon == '✅'
         assert 'manifest' in desc.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST: ULTRASOUND VIEWER GUARD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestUltrasoundViewerGuard:
+    """Viewer should skip large ultrasound series to avoid OOM."""
+
+    def test_skips_large_us_series(self):
+        files = [make_mock_file(f'us_{i}.dcm') for i in range(MAX_US_VIEWER_INSTANCES + 1)]
+
+        cache_entries = [
+            {
+                'filename': f'us_{i}.dcm',
+                'sop_instance_uid': f'SOP_{i}',
+                'series_instance_uid': 'SER_US_BIG',
+                'instance_number': i + 1,
+                'modality': 'US',
+                'series_desc': 'Large US',
+            }
+            for i in range(MAX_US_VIEWER_INSTANCES + 1)
+        ]
+
+        cache = make_file_info_cache(cache_entries)
+        state = build_viewer_state(files, cache)
+
+        assert len(state.series_list) == 0
+        assert "Viewer disabled for large ultrasound series due to memory safety limits." in state.viewer_notices
+
+    def test_allows_small_us_series(self):
+        files = [make_mock_file(f'us_{i}.dcm') for i in range(MAX_US_VIEWER_INSTANCES)]
+
+        cache_entries = [
+            {
+                'filename': f'us_{i}.dcm',
+                'sop_instance_uid': f'SOP_{i}',
+                'series_instance_uid': 'SER_US_SAFE',
+                'instance_number': i + 1,
+                'modality': 'US',
+                'series_desc': 'Small US',
+            }
+            for i in range(MAX_US_VIEWER_INSTANCES)
+        ]
+
+        cache = make_file_info_cache(cache_entries)
+        state = build_viewer_state(files, cache)
+
+        assert len(state.series_list) == 1
+        assert state.viewer_notices == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -3271,9 +3271,13 @@ if st.session_state.get('uploaded_dicom_files'):
                 baseline_order_manifest=None,
             )
             st.session_state.viewer_needs_rebuild = False
-        
+
         viewer_state: ViewerStudyState = st.session_state.viewer_state
-        
+
+        if viewer_state:
+            for notice in viewer_state.viewer_notices:
+                st.info(notice)
+
         if viewer_state and viewer_state.series_list:
             st.markdown("### 📂 Series Browser")
             st.caption("Navigate through series and images. Ordering is preserved from source.")

@@ -34,6 +34,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Viewer safety guard: avoid OOM on very large ultrasound stacks
+MAX_US_VIEWER_INSTANCES = 20
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ORDERING PROVENANCE
@@ -212,6 +215,9 @@ class ViewerStudyState:
     
     # Filter state
     show_non_image_objects: bool = False  # Default: hide OT/SC
+
+    # Non-fatal viewer notices (calm UI messaging)
+    viewer_notices: List[str] = field(default_factory=list)
     
     # Ordering provenance
     series_ordering_method: SeriesOrderingMethod = SeriesOrderingMethod.DISCOVERY_ORDER
@@ -427,9 +433,22 @@ def build_viewer_state(
     
     # Build series list with sorted instances
     series_list: List[ViewerSeries] = []
+    viewer_notices: List[str] = []
     
     for series_uid, instances in series_map.items():
         meta = series_meta[series_uid]
+
+        # Guard: skip viewer construction for large ultrasound series to avoid OOM
+        if meta.get('modality') == 'US' and len(instances) > MAX_US_VIEWER_INSTANCES:
+            logger.warning(
+                "Viewer disabled for ultrasound series %s with %d instances due to memory safety limits",
+                series_uid,
+                len(instances),
+            )
+            notice_text = "Viewer disabled for large ultrasound series due to memory safety limits."
+            if notice_text not in viewer_notices:
+                viewer_notices.append(notice_text)
+            continue
         
         # Determine ordering method and sort
         ordering_method, sorted_instances = _sort_instances(instances)
@@ -458,6 +477,7 @@ def build_viewer_state(
     return ViewerStudyState(
         series_list=sorted_series,
         series_ordering_method=series_ordering_method,
+        viewer_notices=viewer_notices,
     )
 
 

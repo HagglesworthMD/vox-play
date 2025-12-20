@@ -58,10 +58,19 @@ st.markdown(
 # ==============================================================================
 import logging, subprocess
 logger = logging.getLogger(__name__)
-logger.info(
-    "VoxelMask build %s",
-    subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-)
+
+
+def _get_git_short_sha() -> str:
+    """Safely retrieve the current git commit SHA for logging purposes."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return "unknown"
+
+
+logger.info("VoxelMask build %s", _get_git_short_sha())
 
 # ==============================================================================
 # AFTER THIS POINT:
@@ -3273,7 +3282,11 @@ if st.session_state.get('uploaded_dicom_files'):
             st.session_state.viewer_needs_rebuild = False
         
         viewer_state: ViewerStudyState = st.session_state.viewer_state
-        
+
+        # Inform when viewer is intentionally disabled for large series
+        for note in getattr(viewer_state, "disabled_series_notes", []) or []:
+            st.info(note)
+
         if viewer_state and viewer_state.series_list:
             st.markdown("### 📂 Series Browser")
             st.caption("Navigate through series and images. Ordering is preserved from source.")

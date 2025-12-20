@@ -34,6 +34,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+MAX_US_VIEWER_INSTANCES = 20
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ORDERING PROVENANCE
@@ -205,7 +207,10 @@ class ViewerStudyState:
     Stored in st.session_state.viewer_state
     """
     series_list: List[ViewerSeries] = field(default_factory=list)
-    
+
+    # Presentation-only notes about disabled series
+    disabled_series_notes: List[str] = field(default_factory=list)
+
     # Navigation state
     selected_series_idx: int = 0
     selected_instance_idx: int = 0
@@ -392,17 +397,49 @@ def build_viewer_state(
     # Group files by series
     series_map: OrderedDict[str, List[ViewerInstance]] = OrderedDict()
     series_meta: Dict[str, Dict] = {}
-    
+    disabled_series_notes: List[str] = []
+    series_counts: Dict[str, int] = {}
+    skipped_series: set = set()
+
     for idx, f in enumerate(preview_files):
         info = file_info_cache.get(f.name, {})
-        
+
         series_uid = info.get('series_instance_uid', 'UNKNOWN')
         sop_uid = info.get('sop_instance_uid', 'UNKNOWN')
-        
+        modality = info.get('modality', 'UNK') or 'UNK'
+
+        if series_uid in skipped_series:
+            continue
+
+        # Track counts to identify large ultrasound series
+        series_counts[series_uid] = series_counts.get(series_uid, 0) + 1
+        if (
+            modality.upper() == 'US'
+            and series_counts[series_uid] > MAX_US_VIEWER_INSTANCES
+        ):
+            # Skip viewer construction for this series to avoid memory pressure
+            skipped_series.add(series_uid)
+            if series_uid in series_map:
+                del series_map[series_uid]
+                series_meta.pop(series_uid, None)
+            note = (
+                "Viewer disabled for large ultrasound series "
+                f"(over {MAX_US_VIEWER_INSTANCES} images). "
+                "Masking continues normally."
+            )
+            if note not in disabled_series_notes:
+                disabled_series_notes.append(note)
+            logger.info(
+                "Skipping viewer construction for ultrasound series %s with %s instances",
+                series_uid,
+                series_counts[series_uid],
+            )
+            continue
+
         if series_uid not in series_map:
             series_map[series_uid] = []
             series_meta[series_uid] = {
-                'modality': info.get('modality', 'UNK'),
+                'modality': modality,
                 'series_desc': info.get('series_desc', 'Unknown'),
                 'series_number': info.get('series_number'),
             }
@@ -458,6 +495,7 @@ def build_viewer_state(
     return ViewerStudyState(
         series_list=sorted_series,
         series_ordering_method=series_ordering_method,
+        disabled_series_notes=disabled_series_notes,
     )
 
 

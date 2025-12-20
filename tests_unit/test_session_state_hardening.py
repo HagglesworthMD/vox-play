@@ -30,7 +30,8 @@ def test_reset_bumps_run_id_and_clears_run_scoped_keys():
 
     # 1. RUN_ID is changed
     assert ss[RUN_ID_KEY] != "old_run_123"
-    assert len(ss[RUN_ID_KEY]) >= 32  # hex uuid length
+    assert ss[RUN_ID_KEY].startswith("VM_RUN_")
+    assert len(ss[RUN_ID_KEY]) == 19  # VM_RUN_ + 12 hex chars
     assert prev_id == "old_run_123"
 
     # 2. Run-scoped keys are removed or reset to safe defaults

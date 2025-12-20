@@ -2,7 +2,10 @@
 from __future__ import annotations
 from typing import Any, MutableMapping
 import logging
-import uuid
+
+from pathlib import Path
+
+from run_context import generate_run_id, build_run_paths, ensure_run_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +65,7 @@ RUN_SCOPED_KEYS = {
 
 def new_run_id() -> str:
     """Generate a new unique run identifier."""
-    return uuid.uuid4().hex
+    return generate_run_id()
 
 def reset_run_state(ss: MutableMapping[str, Any], *, reason: str | None = None) -> str | None:
     """
@@ -86,7 +89,13 @@ def reset_run_state(ss: MutableMapping[str, Any], *, reason: str | None = None) 
             ss.pop(k, None)
 
     # Bump run id so anything created after is definitely new
-    ss[RUN_ID_KEY] = new_run_id()
+    run_id = new_run_id()
+    downloads_root = Path(__file__).resolve().parent.parent / "downloads"
+    run_paths = build_run_paths(downloads_root, run_id)
+    ensure_run_dirs(run_paths)
+
+    ss[RUN_ID_KEY] = run_id
+    ss["run_paths"] = run_paths
     
     # Set safe defaults if the UI expects them to exist
     ss.setdefault("selected_instance_idx", 0)

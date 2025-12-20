@@ -158,6 +158,7 @@ from run_status import update_run_status  # Phase 8: Fail-safe completion
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DOWNLOADS_ROOT = Path(BASE_DIR) / "downloads"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 12: RUN-SCOPED VIEWER CACHE
@@ -343,21 +344,30 @@ def _ensure_early_run_context() -> 'RunPaths':
     """
     from pathlib import Path
     
-    if st.session_state.get('run_paths') is None:
-        # Generate new run ID
-        run_id = generate_run_id()
+    run_paths = st.session_state.get('run_paths')
+    run_id = st.session_state.get('run_id')
+
+    if run_paths is None:
+        # Generate new run ID or reuse pre-seeded one from reset_run_state()
+        run_id = run_id or generate_run_id()
         st.session_state.run_id = run_id
-        
+
         # Build paths - use downloads directory as output root
-        output_root = Path(os.path.join(BASE_DIR, "downloads"))
-        run_paths = build_run_paths(output_root, run_id)
-        
+        run_paths = build_run_paths(DOWNLOADS_ROOT, run_id)
+
         # Create all directories including viewer_cache
         ensure_run_dirs(run_paths)
-        
+
         st.session_state.run_paths = run_paths
         print(f"[Phase12] Early run context created: {run_paths.run_id}")
-    
+    else:
+        # Ensure session_state.run_id stays aligned with existing run_paths
+        if run_id != run_paths.run_id:
+            logger.warning(
+                "RUNCTX: run_id drift detected; realigning session run_id to run_paths",
+            )
+            st.session_state.run_id = run_paths.run_id
+
     return st.session_state.run_paths
 
 
@@ -2076,8 +2086,8 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     zip_data = st.session_state.output_zip_buffer
     
     # Create downloads directory
-    downloads_dir = os.path.join(os.path.dirname(__file__), "..", "downloads")
-    os.makedirs(downloads_dir, exist_ok=True)
+    downloads_dir = DOWNLOADS_ROOT
+    downloads_dir.mkdir(parents=True, exist_ok=True)
     
     # Phase 8: Get run paths for deterministic output locations
     run_paths = st.session_state.get("run_paths")
@@ -2086,7 +2096,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         # Multiple files - use meaningful folder name for ZIP filename
         output_name = st.session_state.get('output_folder_name', f"VoxelMask_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         zip_filename = f"{output_name}.zip"
-        zip_path = os.path.join(downloads_dir, zip_filename)
+        zip_path = downloads_dir / zip_filename
         
         # Write ZIP to disk
         with open(zip_path, 'wb') as f:
@@ -2141,7 +2151,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         # Single file - STILL use ZIP format with viewer for consistency
         output_name = st.session_state.get('output_folder_name', f"VoxelMask_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         zip_filename = f"{output_name}.zip"
-        zip_path = os.path.join(downloads_dir, zip_filename)
+        zip_path = downloads_dir / zip_filename
         
         # Write ZIP to disk (already created with viewer in processing step)
         with open(zip_path, 'wb') as f:
@@ -2183,7 +2193,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     if run_viewer_path and os.path.exists(run_viewer_path) and run_paths:
         # Display viewer panel with localhost HTTP server button
         st.markdown("""
-        <div style="background: linear-gradient(135deg, rgba(35, 134, 54, 0.15) 0%, rgba(51, 145, 255, 0.1) 100%); 
+        <div style="background: linear-gradient(135deg, rgba(35, 134, 54, 0.15) 0%, rgba(51, 145, 255, 0.1) 100%);
                     border: 1px solid rgba(35, 134, 54, 0.4); 
                     border-radius: 12px; 
                     padding: 16px 20px; 
@@ -2204,10 +2214,13 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
                 st.success(f"✅ {message}")
             else:
                 st.error(f"❌ {message}")
-        
+
         # Show canonical path for audit/support reference
         st.caption(f"📁 Viewer path: `{run_viewer_path}`")
-    
+    elif run_viewer_path and not run_paths:
+        logger.warning("RUNCTX: viewer path present without run_paths; disabling viewer button")
+        st.warning("Viewer unavailable: run context missing. Please restart the job if this persists.")
+
     # Always offer audit log download
     audit_filename = f"VoxelMask_AuditLog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     
@@ -2215,7 +2228,7 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
     if run_paths:
         audit_path = str(run_paths.logs_dir / audit_filename)
     else:
-        audit_path = os.path.join(downloads_dir, audit_filename)
+        audit_path = str(downloads_dir / audit_filename)
     
     with open(audit_path, 'w', encoding='utf-8') as f:
         f.write(st.session_state.combined_audit_logs)
@@ -4181,15 +4194,15 @@ if st.session_state.get('uploaded_dicom_files'):
                 # PHASE 8: Create Run Context (Operational Hardening 4.2)
                 # Single run ID for this entire processing session
                 # ═══════════════════════════════════════════════════════════════
-                run_id = generate_run_id()
-                st.session_state.run_id = run_id
-                
-                # Determine output root (use downloads directory for now)
-                output_root = Path(os.path.dirname(__file__)).parent / "downloads"
-                run_paths = build_run_paths(output_root, run_id)
-                ensure_run_dirs(run_paths)
-                st.session_state.run_paths = run_paths
-                
+                run_paths = _ensure_early_run_context()
+                run_id = run_paths.run_id
+
+                if st.session_state.get("run_id") != run_paths.run_id:
+                    logger.error(
+                        "RUNCTX: run_id/session mismatch before processing; aligning to run_paths",
+                    )
+                    st.session_state.run_id = run_paths.run_id
+
                 # Log run context creation (debug, non-PHI)
                 print(f"[Phase8] Run context created: {run_id}")
                 print(f"[Phase8] Run directory: {run_paths.root}")
@@ -4216,7 +4229,7 @@ if st.session_state.get('uploaded_dicom_files'):
                 try:
                     mode = st.session_state.get("processing_mode") or pacs_operation_mode
                     preflight_result = run_preflight(
-                        downloads_dir=Path(os.path.dirname(__file__)).parent / "downloads",
+                        downloads_dir=DOWNLOADS_ROOT,
                         run_root=run_paths.root,
                         processing_mode=mode,
                         min_free_bytes=250 * 1024 * 1024,  # 250MB conservative
@@ -4737,6 +4750,8 @@ if st.session_state.get('uploaded_dicom_files'):
                             original_name = first_file_meta.get('patient_name', '')
                             root_folder_raw = f"UID_Regen_{original_name}" if original_name else f"UID_Regen_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                         elif patient_name and patient_name != "PRESERVED":
+                            # TODO(RUNCTX): Patient names in export folders risk PHI leakage. Replace with governance-safe identifier.
+                            logger.warning("RUNCTX: patient name used in export folder naming; replace with PHI-neutral token")
                             root_folder_raw = patient_name
                         else:
                             root_folder_raw = f"Repair_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -4762,7 +4777,10 @@ if st.session_state.get('uploaded_dicom_files'):
                     root_folder = root_folder.replace(' ', '_').replace('^', '_').strip('_')
                     if not root_folder:
                         root_folder = f"VoxelMask_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    
+
+                    # Run-scoped ZIP root to prevent cross-run ambiguity
+                    root_folder = f"{run_paths.run_id}_{root_folder}"
+
                     # Store root_folder for download filename
                     st.session_state.output_folder_name = root_folder
                     

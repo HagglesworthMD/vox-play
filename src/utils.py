@@ -150,5 +150,21 @@ def should_render_pixels(ds: pydicom.Dataset, max_raw_pixel_bytes: int = 150_000
     # or handle it elsewhere.
     if est_bytes == 0 and (not hasattr(ds, 'PixelData') or not ds.PixelData):
         return True
-        
+
     return est_bytes <= max_raw_pixel_bytes
+
+
+def evaluate_us_mask_memory_guard(ds: pydicom.Dataset, max_mb: int) -> tuple[bool, float]:
+    """
+    Decide whether to skip US masking based on estimated pixel memory.
+
+    Args:
+        ds: pydicom Dataset to evaluate (metadata-only read is sufficient).
+        max_mb: Threshold in megabytes for US pixel masking.
+
+    Returns:
+        Tuple of (should_skip: bool, estimated_mb: float)
+    """
+    est_bytes = estimate_pixel_memory(ds)
+    est_mb = est_bytes / (1024 * 1024)
+    return est_mb > max_mb, est_mb

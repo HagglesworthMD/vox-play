@@ -61,6 +61,11 @@ RUN_SCOPED_KEYS = {
     'scrub_uuid',
     'input_file_hash',
     'output_file_hash',
+    
+    # Phase 14: PACS workflow state
+    'mask_candidates_ready',
+    'mask_review_accepted',
+    'output_zip_path',  # Phase 14: disk-backed ZIP path
 }
 
 def new_run_id() -> str:

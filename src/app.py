@@ -22,48 +22,319 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# RERUN FUSE (ANTI-GRAVITY STABLE)
+# BUILD STAMP (dev-only) — proves which repo is being served
 # ==============================================================================
+import os as _os
+import time as _time
+_BUILD_STAMP = f"📍 {__file__} | PID {_os.getpid()} | {_time.strftime('%Y-%m-%d %H:%M:%S')}"
+print(f"[BUILD] {_BUILD_STAMP}", flush=True)
+
+# ==============================================================================
+# RERUN FUSE + DEBUG HARNESS (ANTI-GRAVITY STABLE)
+# ==============================================================================
+
+# Debug flag for UI rerun instrumentation (set True to diagnose rerun loops)
+DEBUG_UI = True  # <-- ENABLED FOR STORM DEBUGGING
+
+def _safe_repr(val, max_len=50):
+    """Safe short representation of a value for debug output."""
+    try:
+        t = type(val).__name__
+        if hasattr(val, '__len__'):
+            return f"<{t} len={len(val)}>"
+        return f"<{t}>"
+    except:
+        return "<???>"
+
+def ss_set(key: str, value) -> bool:
+    """
+    Set session_state[key] = value ONLY if it differs from current value.
+    Prevents "same-value writes" from causing Streamlit reruns.
+    Returns True if value was actually changed.
+    """
+    current = st.session_state.get(key)
+    # For bytes/large objects, compare by identity first, then equality
+    if current is value:
+        return False
+    if current == value:
+        return False
+    st.session_state[key] = value
+    return True
+
 def _apply_rerun_fuse():
     """
     Prevent infinite rerun loops by tracking reruns without meaningful state changes.
     Pattern: After an action executes, it transitions to 'idle' on the next run.
     We only count reruns when 'idle' repeats without user interaction.
     """
+    import sys
     ss = st.session_state
+    
+    # Initialize debug tracking (only runs once)
+    if '_debug_rerun_count' not in ss:
+        ss._debug_rerun_count = 0
+        ss._debug_key_churn = {}  # {key: change_count}
+        ss._debug_prev_snapshot = {}
+        ss._debug_changed_keys = []
+        ss._debug_added_keys = []
+        ss._debug_removed_keys = []
+    
+    # Increment rerun count (always, for display purposes)
+    ss._debug_rerun_count += 1
+    
+    # Take snapshot of current keys + safe repr (LOCAL - no state write)
+    current_snapshot = {}
+    for k in ss.keys():
+        if not k.startswith('_debug') and not k.startswith('_fuse'):  # Skip debug/fuse keys
+            try:
+                current_snapshot[k] = _safe_repr(ss[k])
+            except:
+                current_snapshot[k] = "<error>"
+    
+    # Compare with previous snapshot (LOCAL computation)
+    prev_snapshot = ss.get('_debug_prev_snapshot', {})
+    changed_keys = []
+    added_keys = []
+    removed_keys = []
+    
+    all_keys = set(current_snapshot.keys()) | set(prev_snapshot.keys())
+    for k in all_keys:
+        curr_val = current_snapshot.get(k)
+        prev_val = prev_snapshot.get(k)
+        if curr_val != prev_val:
+            if prev_val is None:
+                added_keys.append(k)
+            elif curr_val is None:
+                removed_keys.append(k)
+            else:
+                changed_keys.append(k)
+            # Track churn (only when there ARE changes)
+            ss._debug_key_churn[k] = ss._debug_key_churn.get(k, 0) + 1
+    
+    # Only update debug state tracking when there are ACTUAL changes
+    # This prevents the debug harness from causing its own churn
+    if changed_keys or added_keys or removed_keys:
+        ss._debug_prev_snapshot = current_snapshot
+        ss._debug_changed_keys = changed_keys
+        ss._debug_added_keys = added_keys
+        ss._debug_removed_keys = removed_keys
+    # If no changes, keep the previous values (don't write)
+    
+    # Standard rerun count tracking
     if 'rerun_count' not in ss:
         ss.rerun_count = 0
         ss.executed_action = "initial"
     
-    _current_exec = ss.get('executed_action', 'unknown')
+    _current_exec = ss.get('executed_action', 'initial')
     _last_exec = ss.get('_fuse_last_exec', 'none')
     
-    # If an action was just executed (not idle/initial), transition to idle
-    if _current_exec not in ('idle', 'initial', 'none') and _current_exec == _last_exec:
-        # Action was consumed on the previous run, now transition to idle
-        ss.executed_action = 'idle'
-        _current_exec = 'idle'
+    # Phase 14: REMOVED auto-transition to 'idle' - it was causing rerun storms!
+    # Actions are set by button clicks and consumed once. No render-phase mutation.
+    # The fuse tracks changes but does NOT mutate executed_action itself.
     
     if _current_exec != _last_exec:
         ss.rerun_count = 0
-        ss._fuse_last_exec = _current_exec
+        ss._fuse_idle_reruns = 0  # Reset idle counter on action change
+        ss_set('_fuse_last_exec', _current_exec)  # Use ss_set to avoid churn
     else:
-        ss.rerun_count += 1
+        # Only count as a "storm" rerun if there were actual state changes
+        # Empty reruns (changed=[]) are normal Streamlit behavior
+        if changed_keys or added_keys or removed_keys:
+            ss.rerun_count += 1
+        # Track total idle reruns (even without state changes)
+        if not ss.get('_fuse_idle_reruns'):
+            ss._fuse_idle_reruns = 0
+        ss._fuse_idle_reruns = ss.get('_fuse_idle_reruns', 0) + 1
     
-    # Only trip fuse during idle state (no user action pending)
-    if ss.rerun_count > 50 and _current_exec == 'idle':
-        st.error(f"⚠️ RERUN LOOP DETECTED! The UI is unstable. Please refresh the page.")
+    # Storm fuse #1: stop if too many CHURNING reruns without action change
+    if ss.rerun_count > 25:
+        # Get top churning keys
+        top_churn = sorted(ss._debug_key_churn.items(), key=lambda x: -x[1])[:10]
+        st.error(f"⚠️ RERUN STORM DETECTED ({ss._debug_rerun_count} reruns with churn)")
+        st.warning(f"**Changed this run:** {changed_keys[:10]}")
+        st.warning(f"**Top churn keys:** {top_churn}")
+        st.info(f"Last action: `{_current_exec}` | Last callback: `{ss.get('_debug_last_callback', 'none')}`")
+        st.stop()
+    
+    # Storm fuse #2: stop if too many TOTAL idle reruns (prevents OOM from auto-reruns)
+    if ss.get('_fuse_idle_reruns', 0) > 100:
+        st.warning(f"⏸️ **Idle rerun limit reached** ({ss._fuse_idle_reruns} reruns without user action)")
+        st.info("The app has stabilized. Click any button or refresh the page to continue.")
+        st.info(f"Last action: `{_current_exec}` | Memory: {_get_memory_mb():.1f} MB")
         st.stop()
 
-    # Log to console with callback debug (every 5th rerun to reduce noise)
-    if ss.rerun_count % 5 == 0 or ss.rerun_count < 3:
-        import sys
+    # Log to console
+    if DEBUG_UI or ss.rerun_count % 5 == 0 or ss.rerun_count < 3:
         _last_cb = ss.get('_debug_last_callback', 'none')
-        print(f"[DEBUG] RERUN #{ss.rerun_count} (last_exec: {_current_exec}, last_cb: {_last_cb})", file=sys.stderr, flush=True)
+        print(f"[DEBUG] RERUN #{ss.rerun_count} (total={ss._debug_rerun_count}, exec={_current_exec}, cb={_last_cb}, changed={changed_keys[:5]})", file=sys.stderr, flush=True)
+    
     ss._debug_last_callback = 'none'  # Reset for next run
 
 _apply_rerun_fuse()
 
+# ==============================================================================
+# PHASE 14: ACTION/REDUCER ARCHITECTURE
+# ==============================================================================
+# 
+# SESSION STATE CATEGORIES:
+# 
+# 1. DRAFT/UI STATE (safe to mutate during render):
+#    - Widget values: us_mx_manual, us_my_manual, etc.
+#    - Selection state: selected_series_uid, selected_instance_idx
+#    - UI toggles: expander states, tab selections
+#    - These can change freely without triggering storms
+#
+# 2. COMMITTED/RUN STATE (only mutate via apply_action):
+#    - processing_complete, processed_files, output_zip_path
+#    - combined_audit_logs, processing_stats
+#    - mask_candidates_ready, mask_review_accepted
+#    - These represent completed operations; changing them triggers reruns
+#
+# 3. DERIVED/RENDER STATE (computed, never stored):
+#    - Computed via compute_view_model()
+#    - button enabled/disabled states, warning messages
+#    - Never written to session_state during render
+#
+# ACTION FLOW:
+#    Button click → on_click sets ss.pending_action → rerun →
+#    Action consumed (cleared FIRST) → Handler executes → State updated once
+#
+# ==============================================================================
+
+def _get_memory_mb():
+    """Get current RSS memory usage in MB (Linux only)."""
+    try:
+        with open('/proc/self/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return int(line.split()[1]) / 1024  # kB to MB
+    except:
+        pass
+    return 0.0
+
+def compute_view_model(ss) -> dict:
+    """
+    Compute derived UI state from committed state.
+    
+    Phase 13.5: This is now a thin wrapper around voxelmask_core.compute_view_model.
+    The core implementation is in src/voxelmask_core/viewmodel.py.
+    
+    Returns a dict of computed values for rendering.
+    This function is PURE - it reads state but NEVER writes.
+    Call this during render to get button states, warnings, etc.
+    """
+    # Use core implementation when available (import happens later in file)
+    # For now, keep inline until full wiring is complete
+    review_session = ss.get('phi_review_session')
+    
+    return {
+        # Processing gate
+        'can_process': (
+            ss.get('mask_candidates_ready', False) and 
+            ss.get('mask_review_accepted', False) and
+            not ss.get('processing_complete', False)
+        ),
+        'processing_complete': ss.get('processing_complete', False),
+        
+        # Review state
+        'has_review_session': review_session is not None,
+        'review_accepted': review_session.review_accepted if review_session else False,
+        'review_sealed': review_session.is_sealed() if review_session else False,
+        
+        # File state
+        'file_count': len(ss.get('uploaded_dicom_files', [])),
+        'has_files': len(ss.get('uploaded_dicom_files', [])) > 0,
+        
+        # Output state
+        'has_output': ss.get('output_zip_path') is not None,
+        
+        # Memory
+        'rss_mb': _get_memory_mb(),
+    }
+
+# ==============================================================================
+# DEBUG PANEL (visible when DEBUG_UI=True)
+# ==============================================================================
+# NOTE: _get_memory_mb() is defined above in the Action/Reducer section
+
+if DEBUG_UI:
+    st.caption(f"🔧 **BUILD:** `{_BUILD_STAMP}` | Phase 13.5 voxelmask_core integrated")
+    with st.expander("🔧 Debug: Rerun Storm Detector", expanded=True):
+        ss = st.session_state
+        
+        # Phase 13.5: Track action consumption and explicit reruns
+        _action_consumed_this_run = ss.get('_debug_action_consumed_this_run', False)
+        _explicit_rerun_called = ss.get('_debug_explicit_rerun_called', False)
+        _pending_action_value = ss.get('pending_action')
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"""
+            **Rerun Stats:**
+            - Total reruns: `{ss.get('_debug_rerun_count', 0)}`
+            - Churning reruns: `{ss.get('rerun_count', 0)}`
+            - Executed action: `{ss.get('executed_action', 'none')}`
+            """)
+        
+        with col2:
+            st.markdown(f"""
+            **App Phase:**
+            - Processing complete: `{ss.get('processing_complete', False)}`
+            - Review session: `{'active' if ss.get('phi_review_session') else 'none'}`
+            - Files uploaded: `{len(ss.get('uploaded_dicom_files', []))}`
+            """)
+        
+        with col3:
+            rss_mb = _get_memory_mb()
+            peak_mb = ss.get('_debug_peak_rss_mb', 0)
+            if rss_mb > peak_mb:
+                ss._debug_peak_rss_mb = rss_mb
+                peak_mb = rss_mb
+            
+            # ZIP status diagnostics
+            _zip_path = ss.get('output_zip_path')
+            _zip_exists = os.path.exists(_zip_path) if _zip_path else False
+            _zip_buf = ss.get('output_zip_buffer')
+            if _zip_buf == b"DISK_BACKED":
+                _buf_status = "DISK_BACKED"
+            elif _zip_buf and len(_zip_buf) > 0:
+                _buf_status = f"{len(_zip_buf)//1024}KB"
+            else:
+                _buf_status = "empty"
+            
+            st.markdown(f"""
+            **Memory / ZIP:**
+            - RSS: `{rss_mb:.1f} MB` / Peak: `{peak_mb:.1f} MB`
+            - ZIP path: `{bool(_zip_path)}`
+            - ZIP exists: `{_zip_exists}`
+            - Buffer: `{_buf_status}`
+            """)
+        
+        # Show changed keys this run
+        changed = ss.get('_debug_changed_keys', [])
+        added = ss.get('_debug_added_keys', [])
+        removed = ss.get('_debug_removed_keys', [])
+        
+        if changed or added or removed:
+            st.markdown(f"**This run:** Changed=`{changed[:8]}` Added=`{added[:5]}` Removed=`{removed[:5]}`")
+        
+        # Top churn keys
+        churn = ss.get('_debug_key_churn', {})
+        if churn:
+            top_churn = sorted(churn.items(), key=lambda x: -x[1])[:10]
+            st.markdown(f"**Top churn (cumulative):** `{top_churn}`")
+        
+        # Phase 13.5: Action consumer and rerun tracking
+        st.markdown(f"""
+        **Action Flow:**
+        - pending_action: `{_pending_action_value}`
+        - action_consumed_this_run: `{_action_consumed_this_run}`
+        - explicit_rerun_called: `{_explicit_rerun_called}`
+        """)
+        
+        # Reset debug flags at END of debug panel (ready for next run)
+        ss['_debug_action_consumed_this_run'] = False
+        ss['_debug_explicit_rerun_called'] = False
 
 # ------------------------------------------------------------------------------
 # SIDEBAR & LAYOUT KILL SWITCH
@@ -206,6 +477,22 @@ from preflight import run_preflight, raise_if_failed, PreflightError  # Phase 8:
 from evidence_capture import build_run_receipt, write_run_receipt, assert_phi_sterile  # Phase 8: Evidence capture
 from session_state import reset_run_state, RUN_ID_KEY  # Phase 12: Centralized run state
 from run_status import update_run_status  # Phase 8: Fail-safe completion
+
+# Phase 13.5: Core logic extraction - import from voxelmask_core
+import voxelmask_core
+from voxelmask_core import (
+    compute_view_model as _core_compute_view_model,
+    ViewModel,
+    DraftState,
+    CoreState,
+    Action,
+    ActionType,
+    apply_action,
+    create_scope_audit_block as _core_create_scope_audit_block,
+    is_pixel_clean_modality,
+    PIXEL_CLEAN_MODALITIES as CORE_PIXEL_CLEAN_MODALITIES,
+    PREVIEW_REQUIRED_MODALITIES as CORE_PREVIEW_REQUIRED_MODALITIES,
+)
 
 # Define base directory for dynamic path construction
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -589,6 +876,8 @@ def init_session_state_defaults():
         ss['processed_file_data'] = None
     if 'output_zip_buffer' not in ss:
         ss['output_zip_buffer'] = None
+    if 'output_zip_path' not in ss:
+        ss['output_zip_path'] = None  # Phase 14: disk-backed ZIP path
     if 'processing_stats' not in ss:
         ss['processing_stats'] = None
     
@@ -607,6 +896,13 @@ def init_session_state_defaults():
     # Review Session
     if 'phi_review_session' not in ss:
         ss['phi_review_session'] = None
+    
+    # Phase 14: PACS-realistic workflow state
+    # Detect → Review → Accept → Process
+    if 'mask_candidates_ready' not in ss:
+        ss['mask_candidates_ready'] = False  # True after detection completes
+    if 'mask_review_accepted' not in ss:
+        ss['mask_review_accepted'] = False  # True when user accepts review
         
     # Phase 13: Action Tracking
     # pending_action: Set by buttons, consumed by logic
@@ -615,6 +911,23 @@ def init_session_state_defaults():
         ss['pending_action'] = None
     if 'executed_action' not in ss:
         ss['executed_action'] = "initial"
+    
+    # Phase 13.5: One-shot processing trigger + debug flags
+    # These are reset each run (not just initialized once)
+    if '_run_processing_once' not in ss:
+        ss['_run_processing_once'] = False
+    if '_processing_payload' not in ss:
+        ss['_processing_payload'] = None
+    if '_processing_failed' not in ss:
+        ss['_processing_failed'] = False
+    
+    # Debug flags: reset EVERY run (capture state, then clear for next run)
+    # NOTE: These are read by debug panel before this reset happens on next run
+    #       so they correctly show "this run" values, then reset for next run.
+    # This backup reset ensures they're cleared even if DEBUG_UI is off.
+    if not DEBUG_UI:
+        ss['_debug_action_consumed_this_run'] = False
+        ss['_debug_explicit_rerun_called'] = False
         
     # Cleanup legacy keys that might collide with new button keys
     legacy_keys = ["bulk_mask_all", "bulk_unmask_all", "bulk_reset", "add_manual_region", "clear_manual", "accept_review", "last_action"]
@@ -2145,7 +2458,13 @@ os.makedirs("studies", exist_ok=True)
 # ═══════════════════════════════════════════════════════════════════════════════
 # SUCCESS VIEW - Show download buttons when processing is complete (HIGH PRIORITY)
 # ═══════════════════════════════════════════════════════════════════════════════
-if st.session_state.get('processing_complete') and st.session_state.get('output_zip_buffer'):
+# Phase 14: Support both disk-backed (preferred) and RAM-backed ZIP
+_has_zip = (
+    st.session_state.get('processing_complete') and 
+    (st.session_state.get('output_zip_path') or st.session_state.get('output_zip_buffer'))
+)
+if _has_zip:
+    # Root cause fixed (Phase 14): scrub_uuid once-per-run, no st.rerun(), zip_buffer guard
     st.success(f"✅ Processing complete! {len(st.session_state.processed_files)} files processed successfully")
     
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -2205,7 +2524,34 @@ if st.session_state.get('processing_complete') and st.session_state.get('output_
         st.caption(f"📥 Input: {input_mb:.2f} MB  |  🏷️ Profile: {profile_display}  |  🕐 {stats.get('timestamp', '')[:19].replace('T', ' ')}")
     
     num_files = len(st.session_state.processed_files)
-    zip_data = st.session_state.output_zip_buffer
+    
+    # Phase 14: Robust ZIP loading with fallback and error handling
+    zip_path = st.session_state.get('output_zip_path')
+    zip_buffer = st.session_state.get('output_zip_buffer')
+    zip_data = None
+    _zip_source = "none"
+    
+    # Prefer disk-backed ZIP (memory-efficient for Steam Deck)
+    if zip_path and os.path.exists(zip_path):
+        try:
+            with open(zip_path, 'rb') as f:
+                zip_data = f.read()
+            _zip_source = "disk"
+        except Exception as e:
+            print(f"[Phase14] Failed to read ZIP from disk: {e}")
+    
+    # Fallback to RAM-backed buffer (but NOT the DISK_BACKED sentinel)
+    if zip_data is None and zip_buffer and zip_buffer != b"DISK_BACKED":
+        zip_data = zip_buffer
+        _zip_source = "buffer"
+    
+    # Guard: if no ZIP data available, show calm error
+    if zip_data is None:
+        st.warning("⚠️ Export artifact missing — please click 'Start New Job' and re-process your files.")
+        print(f"[Phase14] ZIP missing: path={zip_path}, exists={os.path.exists(zip_path) if zip_path else False}, buffer={type(zip_buffer)}")
+        st.stop()
+    
+    print(f"[Phase14] ZIP loaded from {_zip_source} ({len(zip_data)//1024}KB)")
     
     # Create downloads directory
     downloads_dir = DOWNLOADS_ROOT
@@ -2411,8 +2757,9 @@ else:
         key="gateway_profile_selector"
     )
     
-    # Update session state
-    st.session_state.gateway_profile = pacs_operation_mode
+    # Update session state ONLY if changed (prevents rerun loops)
+    if st.session_state.gateway_profile != pacs_operation_mode:
+        st.session_state.gateway_profile = pacs_operation_mode
     
     # DERIVE legacy 'mode' from profile for backward compatibility
     if pacs_operation_mode == "internal_repair":
@@ -2420,8 +2767,9 @@ else:
     else:
         mode = "Research De-ID"
     
-    # Store for session state compatibility
-    st.session_state.processing_mode = mode
+    # Store for session state compatibility ONLY if changed
+    if st.session_state.get('processing_mode') != mode:
+        st.session_state.processing_mode = mode
     
     # Show profile summary (Phase 6 governance-safe language)
     profile_summaries = {
@@ -2612,7 +2960,14 @@ if 'uploaded_dicom_files' in st.session_state:
         # Phase 12: New files uploaded - full run state reset
         reset_run_state(st.session_state, reason="New files uploaded (different from previous)")
         
-st.session_state.uploaded_dicom_files = dicom_files
+# Guard: Only update if files actually changed (prevents rerun loops)
+_current_files = st.session_state.get('uploaded_dicom_files', [])
+_files_changed = (
+    len(_current_files) != len(dicom_files) or
+    set(f.name for f in _current_files) != set(f.name for f in dicom_files)
+)
+if _files_changed:
+    st.session_state.uploaded_dicom_files = dicom_files
 
 # Analyze DICOM files and create manifest for selection
 if st.session_state.get('uploaded_dicom_files'):
@@ -3057,59 +3412,81 @@ if st.session_state.get('uploaded_dicom_files'):
         review_session = st.session_state.get("phi_review_session")
         
         # ═══════════════════════════════════════════════════════════════════════════
-        # PHASE 13: CONSUME PENDING ACTION (DRAFT PATTERN)
-        # Draft methods stage changes without mutating base state.
-        # Changes commit at processing time (commit_draft), not during UI reruns.
+        # PHASE 13.5: CONSUME PENDING ACTION (UNIFIED CONSUMER)
+        # This is THE SINGLE location where pending_action is consumed.
+        # Pattern: Read action, CLEAR IMMEDIATELY, then execute handler.
         # ═══════════════════════════════════════════════════════════════════════════
-        if review_session and st.session_state.get('pending_action'):
-            _action = st.session_state.pending_action
-            st.session_state.pending_action = None # CONSUME FIRST
+        _pending = st.session_state.get('pending_action')
+        if _pending:
+            # CONSUME FIRST - prevents re-entry on rerun
+            _action = _pending
+            st.session_state.pending_action = None
+            st.session_state['_debug_action_consumed_this_run'] = True
             
-            if _action == "bulk_mask_all":
-                review_session.draft_mask_all_detected()
-                st.session_state.executed_action = "bulk_mask_all"
-                # No st.rerun() - Streamlit reruns naturally after callback
-                
-            elif _action == "bulk_unmask_all":
-                review_session.draft_unmask_all()
-                st.session_state.executed_action = "bulk_unmask_all"
-                
-            elif _action == "bulk_reset":
-                review_session.draft_reset_to_defaults()
-                st.session_state.executed_action = "bulk_reset"
-                
-            elif _action == "add_manual_region":
-                # add_manual_region creates a new region, so we need immediate mutation
-                review_session.add_manual_region(
-                    x=int(st.session_state.get('manual_x_val', 0)), 
-                    y=int(st.session_state.get('manual_y_val', 0)), 
-                    w=int(st.session_state.get('manual_w_val', 100)), 
-                    h=int(st.session_state.get('manual_h_val', 50))
-                )
-                if not review_session.review_started:
-                    review_session.start_review()
-                st.session_state.executed_action = "add_manual_region"
-                
-            elif _action == "clear_manual":
-                review_session.draft_clear_manual_regions()
-                st.session_state.executed_action = "clear_manual"
-                
-            elif _action == "accept_review":
-                # Accept commits draft and seals the session
-                review_session.commit_draft()
-                review_session.accept()
-                st.session_state.executed_action = "accept_review"
-                
-            elif _action.startswith("toggle_"):
-                rid = _action.split("_", 1)[1]  # region_id is a string like "r-abc12345"
-                review_session.draft_toggle_region(rid)
-                st.session_state.executed_action = f"toggle_{rid}"
-                
-            elif _action.startswith("delete_"):
-                rid = _action.split("_", 1)[1]  # region_id is a string
-                review_session.draft_delete_region(rid)
-                st.session_state.executed_action = f"delete_{rid}"
-
+            # ─────────────────────────────────────────────────────────────────────
+            # REVIEW SESSION ACTIONS (require review_session)
+            # ─────────────────────────────────────────────────────────────────────
+            if review_session:
+                if _action == "bulk_mask_all":
+                    review_session.draft_mask_all_detected()
+                    st.session_state.executed_action = "bulk_mask_all"
+                    
+                elif _action == "bulk_unmask_all":
+                    review_session.draft_unmask_all()
+                    st.session_state.executed_action = "bulk_unmask_all"
+                    
+                elif _action == "bulk_reset":
+                    review_session.draft_reset_to_defaults()
+                    st.session_state.executed_action = "bulk_reset"
+                    
+                elif _action == "add_manual_region":
+                    review_session.add_manual_region(
+                        x=int(st.session_state.get('manual_x_val', 0)), 
+                        y=int(st.session_state.get('manual_y_val', 0)), 
+                        w=int(st.session_state.get('manual_w_val', 100)), 
+                        h=int(st.session_state.get('manual_h_val', 50))
+                    )
+                    if not review_session.review_started:
+                        review_session.start_review()
+                    st.session_state.executed_action = "add_manual_region"
+                    
+                elif _action == "clear_manual":
+                    review_session.draft_clear_manual_regions()
+                    st.session_state.executed_action = "clear_manual"
+                    
+                elif _action == "accept_review":
+                    review_session.commit_draft()
+                    review_session.accept()
+                    st.session_state.executed_action = "accept_review"
+                    st.session_state.mask_review_accepted = True
+                    
+                elif _action.startswith("toggle_"):
+                    rid = _action.split("_", 1)[1]
+                    review_session.draft_toggle_region(rid)
+                    st.session_state.executed_action = f"toggle_{rid}"
+                    
+                elif _action.startswith("delete_"):
+                    rid = _action.split("_", 1)[1]
+                    review_session.draft_delete_region(rid)
+                    st.session_state.executed_action = f"delete_{rid}"
+            
+            # ─────────────────────────────────────────────────────────────────────
+            # PROCESSING ACTIONS (Phase 13.5: One-shot trigger pattern)
+            # ─────────────────────────────────────────────────────────────────────
+            if _action == "start_processing":
+                # Phase 13.5: Arm one-shot processing trigger
+                # The actual processing block runs where it is (~line 4791+),
+                # but only when this trigger is set. This enforces action semantics
+                # (enqueue → rerun → consume once → execute once) without moving
+                # the massive processing block.
+                st.session_state._run_processing_once = True
+                st.session_state._run_processing_once_reason = "pending_action:start_processing"
+                st.session_state.executed_action = "start_processing"
+                st.session_state["_debug_explicit_rerun_called"] = True
+                st.rerun()
+            
+            # NOTE: executed_action stays as the action name for debugging.
+            # Idle reruns are handled by _fuse_idle_reruns counter.
 
         # Guard: Only show review panel if review session is initialized
         if review_session is None:
@@ -3881,10 +4258,13 @@ if st.session_state.get('uploaded_dicom_files'):
                 with col4:
                     us_mh = st.number_input("Height", 10, orig_h, existing_mask[3], key="us_mh_manual")
                 
-                if st.button(f"✅ Apply Mask to ALL {len(pure_us_images)} US Images", type="primary", use_container_width=True):
+                if st.button(f"🔍 Detect PHI Regions ({len(pure_us_images)} US Images)", type="primary", use_container_width=True):
                     st.session_state.us_shared_mask = (us_mx, us_my, us_mw, us_mh)
                     st.session_state.batch_mask = (us_mx, us_my, us_mw, us_mh)
-                    st.toast(f"✅ Mask applied to all {len(pure_us_images)} US images")
+                    # Phase 14: Set workflow state - detection complete, require re-acceptance
+                    st.session_state.mask_candidates_ready = True
+                    st.session_state.mask_review_accepted = False  # Reset acceptance on new detection
+                    st.toast(f"🔍 PHI regions detected for {len(pure_us_images)} US images")
                     st.rerun()
                     
             except Exception as e:
@@ -4412,9 +4792,16 @@ if st.session_state.get('uploaded_dicom_files'):
             
             # ═══════════════════════════════════════════════════════════════════
             # EXPORT GATING (PR 5): Require review acceptance for burned-in PHI
+            # Phase 14: PACS-realistic workflow - Detect → Review → Accept → Process
             # ═══════════════════════════════════════════════════════════════════
             review_session = st.session_state.get('phi_review_session')
             requires_phi_review = (bucket_us or bucket_docs) and review_session is not None
+            
+            # Phase 14: For US files, require PHI detection first
+            if bucket_us and not st.session_state.get('mask_candidates_ready', False):
+                if process_btn:
+                    st.warning("🔍 **PHI detection not complete.** Please click 'Detect PHI Regions' above before processing.")
+                can_process = False
             
             if requires_phi_review and not review_session.review_accepted:
                 if process_btn:
@@ -4426,7 +4813,86 @@ if st.session_state.get('uploaded_dicom_files'):
                     summary = review_session.get_summary()
                     st.success(f"✅ Review accepted: {summary['will_mask']} region(s) to mask, {summary['will_unmask']} override(s) to keep")
             
+            # ═══════════════════════════════════════════════════════════════════════════
+            # PHASE 13.5: ACTION ENQUEUE PATTERN
+            # Button click ONLY enqueues action + stores lightweight payload + reruns.
+            # Actual processing runs via one-shot trigger (see below).
+            # This prevents rerun storms by enforcing: enqueue → rerun → consume → execute
+            # ═══════════════════════════════════════════════════════════════════════════
             if process_btn and can_process:
+                # Store lightweight payload (no binary buffers!) for the processing block
+                st.session_state._processing_payload = {
+                    "pacs_operation_mode": pacs_operation_mode,
+                    "uid_only_mode": uid_only_mode,
+                    "new_patient_name": new_patient_name.strip() if new_patient_name else "",
+                    "patient_sex": patient_sex,
+                    "patient_dob": str(patient_dob) if patient_dob else "",
+                    "study_date": str(study_date) if study_date else "",
+                    "study_time": str(study_time) if study_time else "",
+                    "study_type": study_type if 'study_type' in dir() else "",
+                    "location": location.strip() if 'location' in dir() and location else "",
+                    "gestational_age": gestational_age.strip() if 'gestational_age' in dir() and gestational_age else "",
+                    "sonographer_name": sonographer_name.strip() if 'sonographer_name' in dir() and sonographer_name else "",
+                    "referring_physician": referring_physician.strip() if 'referring_physician' in dir() and referring_physician else "",
+                    "reason_for_correction": reason_for_correction if 'reason_for_correction' in dir() else "",
+                    "correction_notes": correction_notes.strip() if 'correction_notes' in dir() and correction_notes else "",
+                    "operator_name": operator_name.strip() if 'operator_name' in dir() and operator_name else "",
+                    "auto_timestamp": auto_timestamp if 'auto_timestamp' in dir() else True,
+                    "output_as_nifti": output_as_nifti if 'output_as_nifti' in dir() else False,
+                    "include_html_viewer": include_html_viewer if 'include_html_viewer' in dir() else False,
+                    "regenerate_uids": regenerate_uids if 'regenerate_uids' in dir() else True,
+                    # Research context
+                    "research_trial_id": research_trial_id.strip() if 'research_trial_id' in dir() and research_trial_id else "",
+                    "research_site_id": research_site_id.strip() if 'research_site_id' in dir() and research_site_id else "",
+                    "research_subject_id": research_subject_id.strip() if 'research_subject_id' in dir() and research_subject_id else "",
+                    "research_time_point": research_time_point if 'research_time_point' in dir() else "",
+                    "research_deid_date": str(research_deid_date) if 'research_deid_date' in dir() and research_deid_date else "",
+                    # FOI context
+                    "foi_case_ref": foi_case_ref if 'foi_case_ref' in dir() else "",
+                    "foi_requesting_party": foi_requesting_party if 'foi_requesting_party' in dir() else "",
+                    "foi_facility_name": foi_facility_name if 'foi_facility_name' in dir() else "",
+                    "foi_signatory": foi_signatory if 'foi_signatory' in dir() else "",
+                    "foi_recipient": foi_recipient if 'foi_recipient' in dir() else "",
+                }
+                # Phase 13.5: Clear failure marker (user explicitly re-initiated)
+                st.session_state._processing_failed = False
+                # Enqueue action and rerun - consumer will arm the one-shot trigger
+                st.session_state.pending_action = "start_processing"
+                st.session_state["_debug_explicit_rerun_called"] = True
+                st.rerun()
+            
+            # ═══════════════════════════════════════════════════════════════════════════
+            # PHASE 13.5: ONE-SHOT PROCESSING TRIGGER
+            # This block runs ONLY when the action consumer has armed _run_processing_once.
+            # Pattern: check trigger → CLEAR IMMEDIATELY → execute processing
+            # ═══════════════════════════════════════════════════════════════════════════
+            if st.session_state.get("_run_processing_once") and can_process:
+                # CLEAR ONE-SHOT TRIGGER IMMEDIATELY (prevents re-entry on rerun)
+                st.session_state._run_processing_once = False
+                
+                # Guard: Check if previous run failed before we reset the marker
+                # If failed, don't reuse stale payload - require fresh button click
+                if st.session_state.get("_processing_failed"):
+                    st.error("⚠️ Previous processing failed. Please click 'Process Selected Files' again to retry.")
+                    st.session_state._processing_payload = None  # Clear stale payload
+                    st.session_state._processing_failed = False  # Clear marker for next attempt
+                    st.stop()
+                
+                # Validate payload exists
+                _payload = st.session_state.get("_processing_payload")
+                if not _payload:
+                    st.error("⚠️ Processing payload missing. Please click 'Process Selected Files' again.")
+                    st.stop()
+                
+                # Extract payload values for use in processing block
+                pacs_operation_mode = _payload.get("pacs_operation_mode", pacs_operation_mode)
+                uid_only_mode = _payload.get("uid_only_mode", False)
+                new_patient_name = _payload.get("new_patient_name", "")
+                
+                # Phase 13.5: Assume failure unless proven success
+                # This makes _processing_failed meaningful without touching 44 try/except blocks
+                st.session_state._processing_failed = True
+                
                 # Note: Accession numbers are generated per-file automatically
                 st.info("🔄 Accession numbers will be generated per-file based on original values")
                 
@@ -4435,6 +4901,10 @@ if st.session_state.get('uploaded_dicom_files'):
                     st.session_state.audit_logger = AuditLogger()
                 elif st.session_state.audit_logger is None:
                     st.session_state.audit_logger = AuditLogger()
+                
+                # Generate scrub_uuid ONCE per run (Phase 14 fix - prevents churn)
+                if not st.session_state.get('scrub_uuid'):
+                    st.session_state.scrub_uuid = st.session_state.audit_logger.generate_scrub_uuid()
                 
                 # Build context dictionary based on profile
                 if pacs_operation_mode == "internal_repair":
@@ -5067,13 +5537,18 @@ if st.session_state.get('uploaded_dicom_files'):
                         "⚠️ Some files could not be masked. See Processing Diagnostics panel."
                     )
 
-                st.session_state.masking_failures = failure_messages
+                # Use ss_set for all writes to prevent storm (Phase 14)
+                ss_set('masking_failures', failure_messages)
                 
-                # Store results in session state
+                # Store results in session state (using ss_set to prevent storm)
                 if processed_files:
-                    st.session_state.processed_files = processed_files
-                    st.session_state.combined_audit_logs = "\n\n".join(combined_audit_logs)
-                    st.session_state.processing_complete = True
+                    ss_set('processed_files', processed_files)
+                    ss_set('combined_audit_logs', "\n\n".join(combined_audit_logs))
+                    ss_set('processing_complete', True)
+                    
+                    # Phase 13.5: Success! Clear failure marker and payload
+                    st.session_state._processing_failed = False
+                    st.session_state._processing_payload = None
                     
                     # ═══════════════════════════════════════════════════════════════
                     # PHASE 8: Mark run completed (4.5)
@@ -5100,22 +5575,31 @@ if st.session_state.get('uploaded_dicom_files'):
                         if 'output_bytes' in pf:
                             total_output_bytes += pf.get('output_bytes', 0)
                     
-                    st.session_state.processing_stats = {
-                        'duration_seconds': processing_duration,
-                        'file_count': len(processed_files),
-                        'input_bytes': total_input_bytes,
-                        'output_bytes': total_output_bytes,
-                        'files_per_second': len(processed_files) / processing_duration if processing_duration > 0 else 0,
-                        'mb_per_second': (total_input_bytes / (1024 * 1024)) / processing_duration if processing_duration > 0 else 0,
-                        'profile': pacs_operation_mode,
-                        'timestamp': datetime.now().isoformat(),
-                        'masking_failure_count': masking_failure_count,
-                    }
+                    # Only set processing_stats if not already set (prevents re-entry churn)
+                    if st.session_state.get('processing_stats') is None:
+                        st.session_state.processing_stats = {
+                            'duration_seconds': processing_duration,
+                            'file_count': len(processed_files),
+                            'input_bytes': total_input_bytes,
+                            'output_bytes': total_output_bytes,
+                            'files_per_second': len(processed_files) / processing_duration if processing_duration > 0 else 0,
+                            'mb_per_second': (total_input_bytes / (1024 * 1024)) / processing_duration if processing_duration > 0 else 0,
+                            'profile': pacs_operation_mode,
+                            'timestamp': datetime.now().isoformat(),
+                            'masking_failure_count': masking_failure_count,
+                        }
+                    
+                    # Phase 14: Release per-file temporaries before ZIP creation (Steam Deck OOM fix)
+                    import gc
+                    gc.collect()
                     
                     # Create ZIP file for bulk download WITH FOLDER STRUCTURE
+                    # Phase 14: Skip if already created (prevents re-entry on rerun)
+                    _skip_zip_creation = st.session_state.get('output_zip_path') is not None
+                    
                     import io
                     import re
-                    zip_buffer = io.BytesIO()
+                    zip_buffer = io.BytesIO() if not _skip_zip_creation else None
                     
                     # ═══════════════════════════════════════════════════════════════
                     # SMART NAMING: Use meaningful identifiers for easy identification
@@ -5361,11 +5845,12 @@ if st.session_state.get('uploaded_dicom_files'):
                                     pdf_filename = "VoxelMask_Report.pdf"
                                 
                                 # Build PDF data dictionary from session state
+                                # Use cached scrub_uuid (generated at processing start)
                                 pdf_data = {
                                     'patient_name': root_folder_raw,
                                     'file_count': len(processed_files),
                                     'timestamp': datetime.now().isoformat(),
-                                    'uuid': st.session_state.audit_logger.generate_scrub_uuid() if hasattr(st.session_state, 'audit_logger') else 'N/A',
+                                    'uuid': st.session_state.get('scrub_uuid', 'N/A'),
                                     'operator': 'WEBAPP_USER',
                                     'mask_applied': any(f.get('mask_applied') for f in processed_files) if processed_files else False,
                                     'uids_regenerated': regenerate_uids,
@@ -5637,12 +6122,8 @@ Studies in this archive:
                             db_path = os.path.join(BASE_DIR, 'scrub_history.db')
                             writer = DecisionTraceWriter(db_path)
                             
-                            # Generate scrub UUID from audit logger if available
-                            scrub_uuid = (
-                                st.session_state.audit_logger.generate_scrub_uuid() 
-                                if hasattr(st.session_state, 'audit_logger') and st.session_state.audit_logger
-                                else str(uuid.uuid4())
-                            )
+                            # Use cached scrub_uuid from processing start (Phase 14 fix)
+                            scrub_uuid = st.session_state.get('scrub_uuid') or str(uuid.uuid4())
                             
                             writer.commit(scrub_uuid, collector)
                             
@@ -5666,10 +6147,41 @@ Studies in this archive:
                             # Log warning but don't fail export
                             st.warning("Decision trace could not be saved. Export completed successfully.")
                     
-                    st.session_state.output_zip_buffer = zip_buffer.getvalue()
+                    # Phase 14: Write ZIP to disk instead of keeping in RAM (Steam Deck OOM fix)
+                    if st.session_state.get('output_zip_path') is None:
+                        import gc
+                        # Get run folder for disk-backed storage  
+                        run_paths = st.session_state.get('run_paths')
+                        if run_paths:
+                            # Use bundle_dir for ZIP output (RunPaths has no outputs_dir)
+                            zip_disk_path = run_paths.bundle_dir / f"{st.session_state.get('output_folder_name', 'export')}.zip"
+                        else:
+                            zip_disk_path = DOWNLOADS_ROOT / f"{st.session_state.get('output_folder_name', 'export')}.zip"
+                        
+                        # Write to disk
+                        zip_disk_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(zip_disk_path, 'wb') as f:
+                            f.write(zip_buffer.getvalue())
+                        
+                        # Store path, not bytes
+                        st.session_state.output_zip_path = str(zip_disk_path)
+                        
+                        # Marker for legacy check (not actual ZIP bytes)
+                        st.session_state.output_zip_buffer = b"DISK_BACKED"
+                        
+                        # Phase 14: Clear heavy 'data' field from processed_files (OOM fix)
+                        # Keep metadata only - data is already on disk in ZIP
+                        for pf in st.session_state.get('processed_files', []):
+                            if 'data' in pf:
+                                del pf['data']
+                        
+                        # Release memory explicitly
+                        del zip_buffer
+                        gc.collect()
+                        print(f"[Phase14] ZIP written to disk: {zip_disk_path} | Memory released, processed_files data cleared")
                     
-                    # Rerun to show download UI
-                    st.rerun()
+                    # NOTE: Removed st.rerun() here - Streamlit auto-reruns after button handler
+                    # (Phase 14 fix - prevents rerun storm)
                 else:
                     # ═══════════════════════════════════════════════════════════════
                     # PHASE 8: Mark run failed (4.5)

@@ -1,0 +1,4 @@
+# Grant access to Steam Deck trackpad devices for the dualmouse daemon.
+# Adjust match rules once you confirm the exact event device names.
+
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*Trackpad*", TAG+="uaccess", MODE="0660", GROUP="input"
